@@ -4,6 +4,7 @@
   brand/icon.png       256x256   home-assistant/brands and HACS
   brand/icon@2x.png    512x512
   brand/logo.png       1024x256  wordmark
+  brand/logo@2x.png    2048x512  hDPI wordmark, for home-assistant/brands
   docs/assets/demo.png           a synthetic scene beside its one-bit render
 
 The demo is deliberately synthetic. The real frames this was built on are
@@ -86,8 +87,8 @@ def icon(size: int) -> Image.Image:
     return img
 
 
-def logo() -> Image.Image:
-    w, h = 1024, 256
+def logo(scale: int = 1) -> Image.Image:
+    w, h = 1024 * scale, 256 * scale
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ic = icon(h).resize((h, h), Image.LANCZOS)
     img.paste(ic, (0, 0), ic)
@@ -116,8 +117,12 @@ def main() -> None:
     icon(256).save(ROOT / "brand" / "icon.png")
     icon(512).save(ROOT / "brand" / "icon@2x.png")
     logo().save(ROOT / "brand" / "logo.png")
+    # home-assistant/brands wants the shortest side between 256 and 512 for the
+    # hDPI logo, so 2048x512 rather than a doubling of an already-wide image.
+    logo(2).save(ROOT / "brand" / "logo@2x.png")
     demo().save(ROOT / "docs" / "assets" / "demo.png", optimize=True)
-    print("brand/icon.png brand/icon@2x.png brand/logo.png docs/assets/demo.png")
+    print("brand/icon.png brand/icon@2x.png brand/logo.png brand/logo@2x.png "
+          "docs/assets/demo.png")
 
 
 if __name__ == "__main__":

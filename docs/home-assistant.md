@@ -40,6 +40,14 @@ Contrast and the candidate count are deliberately not exposed. Contrast overlaps
 
 **Random** draws from the whole library. **Recent** draws from the last N days. **Album** draws from one album; if your library has none yet, the select says so and the option appears the day you make one.
 
+**Search** asks Immich what the photo looks like rather than who is in it.
+Type a description into **Search for** and the frame draws from the matches:
+`cat` is why it exists, because face recognition clusters people and a pet has
+no person to select, but `beach`, `snow` and `birthday cake` work the same way.
+Matches are ranked rather than filtered, so the pool is trimmed to the best
+hundred and twenty; taking everything would let a loose description quietly
+turn Search into Random.
+
 **People** is a union. Tick the people you want and the frame draws from photos of any of them. Immich's own multi-person search is an intersection, photos containing everyone at once, which is rarely what "photos of the kids" means, so the renderer queries each person and merges.
 
 A person is offered only above a minimum number of landscape photographs (20 by default, `MIN_PERSON_PHOTOS` on the renderer). Below that a source runs dry against the recently-shown list and repeats. The renderer counts each named person's eligible photos in the background once a day; the counts are attributes on the Source select.

@@ -152,7 +152,7 @@ Environment variables set the defaults for a fresh install. The full list, gener
 | 🖼️ | **Portraits cropped, not skipped** | The panel is landscape. A portrait is cropped to 800x480 with the window placed on the faces Immich detected, so a close-up keeps its chin and a full-body shot keeps its body. Turn **Portraits** on to skip them instead |
 | 🌾 | **Calm enough to dither** | Mean absolute Laplacian over the cropped frame. Grass and foliage score high and turn into speckle under any algorithm; a subject against a plain wall scores low and survives. The renderer scores twenty candidates and shows the calmest |
 
-Sources you can choose from Home Assistant: **Random**, **Recent** (last N days), **People** (any of the people you tick, not only photos with all of them), **Album**, or one named person. A person is offered only above a minimum number of landscape photographs, because a source that runs dry repeats itself.
+Sources you can choose from Home Assistant: **Random**, **Recent** (last N days), **Search** (a description, so the cat can reach the frame), **People** (any of the people you tick, not only photos with all of them), **Album**, or one named person. A person is offered only above a minimum number of landscape photographs, because a source that runs dry repeats itself.
 
 ---
 

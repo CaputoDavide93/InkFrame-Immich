@@ -11,6 +11,7 @@ from . import InkFrameConfigEntry
 from .const import (
     NO_ALBUMS,
     SOURCE_ALBUM,
+    SOURCE_SEARCH,
     SOURCE_PEOPLE,
     SOURCE_RANDOM,
     SOURCE_RECENT,
@@ -53,7 +54,8 @@ class SourceSelect(InkFrameEntity, SelectEntity):
             name for name, info in self.coordinator.people.items()
             if isinstance(info, dict) and info.get("eligible")
         )
-        options = [SOURCE_RANDOM, SOURCE_RECENT, SOURCE_PEOPLE, SOURCE_ALBUM, *people]
+        options = [SOURCE_RANDOM, SOURCE_RECENT, SOURCE_PEOPLE, SOURCE_ALBUM,
+                   SOURCE_SEARCH, *people]
         current = self.current_option
         # A person who dropped below the threshold since being chosen must
         # still appear, or HA shows the select as invalid.
@@ -68,6 +70,7 @@ class SourceSelect(InkFrameEntity, SelectEntity):
             "person": rest or None,
             "people": SOURCE_PEOPLE,
             "album": SOURCE_ALBUM,
+            "search": SOURCE_SEARCH,
             "recent": SOURCE_RECENT,
         }.get(mode, SOURCE_RANDOM)
 
@@ -83,6 +86,7 @@ class SourceSelect(InkFrameEntity, SelectEntity):
             "landscape_photos_per_person": counts,
             "included_people": data.get("source_people") or [],
             "album": data.get("source_album") or None,
+            "search": data.get("source_query") or None,
             "server_source": self.coordinator.source,
         }
 
@@ -97,6 +101,8 @@ class SourceSelect(InkFrameEntity, SelectEntity):
             await self.coordinator.async_set_source("people")
         elif option == SOURCE_ALBUM:
             await self.coordinator.async_set_source("album")
+        elif option == SOURCE_SEARCH:
+            await self.coordinator.async_set_source("search")
         else:
             await self.coordinator.async_set_source("person", person=option)
 

@@ -93,7 +93,8 @@ class InkFrameCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_source(self, mode: str, person: str = "",
                                days: int | None = None,
                                people: list[str] | None = None,
-                               album: str | None = None) -> None:
+                               album: str | None = None,
+                               query: str | None = None) -> None:
         params: dict[str, Any] = {"mode": mode, "person": person}
         if days is not None:
             params["days"] = days
@@ -101,6 +102,8 @@ class InkFrameCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             params["people"] = ",".join(people)
         if album is not None:
             params["album"] = album
+        if query is not None:
+            params["query"] = query
         await self._get("/source", params=params)
         await self.async_request_refresh()
 

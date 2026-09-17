@@ -7,6 +7,10 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A Search source.** Immich's CLIP search picks photos by description, so
+  `cat` puts the family pet on the frame -- face recognition clusters people,
+  and a pet has no person to select. `beach` and `snow` work the same way.
+  Paired with a **Search for** text entity in Home Assistant.
 - **Portraits are cropped instead of skipped.** The 800x480 window is placed on
   the faces Immich detected, a third down for a full-body shot and centred for
   a close-up. Needs `face.read` on the API key; without it the crop falls back

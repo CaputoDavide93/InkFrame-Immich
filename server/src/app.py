@@ -98,7 +98,7 @@ class Source:
     Random -- that would look exactly like the push never worked.
     """
 
-    VALID = ("random", "person", "people", "recent", "album")
+    VALID = ("random", "person", "people", "recent", "album", "search")
 
     def __init__(self, path: str) -> None:
         self.path = path
@@ -106,6 +106,7 @@ class Source:
         self.person = ""
         self.people: list[str] = []
         self.album = ""
+        self.query = ""
         self.days = 90
         self.settings: dict[str, object] = {k: v[3] for k, v in SETTING_SPEC.items()}
         self.load()
@@ -118,6 +119,7 @@ class Source:
             self.person = data.get("person", "")
             self.people = [str(x) for x in (data.get("people") or [])]
             self.album = data.get("album", "")
+            self.query = data.get("query", "")
             self.days = int(data.get("days", 90))
             for key, raw in (data.get("settings") or {}).items():
                 if key in SETTING_SPEC:
@@ -137,7 +139,8 @@ class Source:
             with open(self.path, "w") as handle:
                 json.dump({"mode": self.mode, "person": self.person,
                            "people": self.people, "album": self.album,
-                           "days": self.days, "settings": self.settings}, handle)
+                           "query": self.query, "days": self.days,
+                           "settings": self.settings}, handle)
         except OSError as exc:
             LOG.warning("could not persist source: %s", exc)
 
@@ -165,7 +168,8 @@ class Source:
         return self.settings
 
     def set(self, mode: str, person: str = "", days: int | None = None,
-            people: list[str] | None = None, album: str | None = None) -> None:
+            people: list[str] | None = None, album: str | None = None,
+            query: str | None = None) -> None:
         mode = (mode or "random").lower()
         if mode not in self.VALID:
             raise ValueError(f"mode must be one of {', '.join(self.VALID)}")
@@ -173,6 +177,11 @@ class Source:
             raise ValueError("mode 'person' needs a person name")
         if mode == "album" and not (album or self.album):
             raise ValueError("mode 'album' needs an album name")
+        # Validate what the source will BE, not what it was: passing an empty
+        # query used to pass this check on the strength of the old term and
+        # then blank it, leaving mode 'search' with nothing to search for.
+        if mode == "search" and not (self.query if query is None else query.strip()):
+            raise ValueError("mode 'search' needs something to search for")
         self.mode = mode
         self.person = person
         # The people list and album are kept even when another mode is active,
@@ -182,6 +191,8 @@ class Source:
             self.people = [p for p in (x.strip() for x in people) if p]
         if album is not None:
             self.album = album
+        if query is not None:
+            self.query = query.strip()
         if days is not None:
             self.days = int(days)
         self.save()
@@ -193,6 +204,8 @@ class Source:
             return "people:" + ",".join(self.people)
         if self.mode == "album":
             return f"album:{self.album}"
+        if self.mode == "search":
+            return f"search:{self.query}"
         if self.mode == "recent":
             return f"recent:{self.days}d"
         return "random"
@@ -482,6 +495,11 @@ class FrameStore:
                                               require_camera=bool(self.source.settings["require_camera"]),
                                               landscape_only=landscape_only)
             assets = self.client.by_album(album_id, landscape_only=landscape_only)
+        elif mode == "search":
+            assets = self.client.by_search(self.source.query,
+                                           landscape_only=landscape_only)
+            if not assets:
+                LOG.warning("nothing matched the search %r", self.source.query)
         elif mode == "recent":
             assets = self.client.recent(days=self.source.days, landscape_only=landscape_only)
         else:
@@ -591,7 +609,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
         url = urlparse(self.path)
-        query = parse_qs(url.query)
+        query = parse_qs(url.query, keep_blank_values=True)
         try:
             self._route(url.path, query)
         except Exception as exc:  # noqa: BLE001 - any failure becomes a 500, never a crash
@@ -634,18 +652,27 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/source":
             if query:
-                store.source.set(
-                    query.get("mode", ["random"])[0],
-                    query.get("person", [""])[0],
-                    int(query["days"][0]) if "days" in query else None,
-                    people=query["people"][0].split(",") if "people" in query else None,
-                    album=query["album"][0] if "album" in query else None,
-                )
+                try:
+                    store.source.set(
+                        query.get("mode", ["random"])[0],
+                        query.get("person", [""])[0],
+                        int(query["days"][0]) if "days" in query else None,
+                        people=query["people"][0].split(",") if "people" in query else None,
+                        album=query["album"][0] if "album" in query else None,
+                        query=query["query"][0] if "query" in query else None,
+                    )
+                except ValueError as exc:
+                    # A caller's mistake, not a failure of the frame: 400, and
+                    # `last_error` stays for things that actually went wrong
+                    # with a render, which is what Home Assistant surfaces.
+                    self._json(400, {"error": str(exc)})
+                    return
                 LOG.info("source set by push: %s", store.source.describe())
             self._json(200, {"mode": store.source.mode,
                              "person": store.source.person,
                              "people": store.source.people,
                              "album": store.source.album,
+                             "query": store.source.query,
                              "days": store.source.days,
                              "describes": store.source.describe()})
             return
@@ -691,6 +718,7 @@ class Handler(BaseHTTPRequestHandler):
                              "people": store.people_summary(),
                              "source_people": store.source.people,
                              "source_album": store.source.album,
+                             "source_query": store.source.query,
                              "source_days": store.source.days,
                              "albums": store.albums_cached(),
                              "last_error": store.last_error})

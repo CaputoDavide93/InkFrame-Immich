@@ -15,6 +15,7 @@ PLATFORMS: list[Platform] = [
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.TEXT,
 ]
 
 type InkFrameConfigEntry = ConfigEntry[InkFrameCoordinator]

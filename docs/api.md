@@ -77,10 +77,11 @@ Defaults for a fresh install. A value set through `/settings` is persisted and w
 
 | Parameter | Values |
 |---|---|
-| `mode` | `random`, `person`, `people`, `recent`, `album` |
+| `mode` | `random`, `person`, `people`, `recent`, `album`, `search` |
 | `person` | a named face, for `person` |
 | `people` | comma-separated names, for `people`. Photos of any of them |
 | `album` | an album name, for `album` |
+| `query` | a description, for `search`. Ranked by Immich's CLIP search |
 | `days` | window for `recent` |
 
 The people list and the album are remembered across mode changes, so switching to People or Album brings back the last choice.

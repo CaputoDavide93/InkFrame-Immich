@@ -112,3 +112,55 @@ def test_album_assets_are_fetched_by_search_not_from_the_album_endpoint():
     assert "/api/search/metadata" in source
     assert "albumIds" in source
     assert '_call(f"/api/albums/{album_id}")' not in source
+
+
+def test_a_search_needs_something_to_search_for():
+    """An empty query would match the whole library, quietly turning Search
+    into Random under a label that says otherwise."""
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+    import app
+
+    source = app.Source.__new__(app.Source)
+    source.path = "/dev/null"
+    source.mode, source.person, source.people = "random", "", []
+    source.album, source.query, source.days = "", "", 90
+    source.settings = {}
+
+    with pytest.raises(ValueError):
+        source.set("search")
+    source.set("search", query="cat")
+    assert source.describe() == "search:cat"
+
+
+def test_search_is_trimmed_to_the_best_matches():
+    """CLIP ranks rather than filters, so a loose query returns the whole
+    library at the tail of the ranking. Taking everything would make Search
+    behave like Random while still calling itself Search."""
+    import inspect
+    from immich import Immich
+
+    source = inspect.getsource(Immich.by_search)
+    assert "out[:want]" in source
+    assert "len(out) < want" in source
+
+
+def test_clearing_the_search_box_cannot_leave_a_stale_term():
+    """Home Assistant's text field can be emptied. If the server kept the old
+    term the box would read empty while the frame still searched for it."""
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+    import app
+
+    source = app.Source.__new__(app.Source)
+    source.path = "/dev/null"
+    source.mode, source.person, source.people = "search", "", []
+    source.album, source.query, source.days = "", "cat", 90
+    source.settings = {}
+
+    # Staying on search with an empty term is refused, not silently ignored.
+    with pytest.raises(ValueError):
+        source.set("search", query="")
+    # Clearing it while moving to another source is fine.
+    source.set("random", query="")
+    assert source.query == "" and source.mode == "random"

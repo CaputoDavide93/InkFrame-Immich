@@ -227,6 +227,35 @@ class Immich:
             return []
         return rows if isinstance(rows, list) else []
 
+    def by_search(self, query: str, landscape_only: bool = True,
+                  want: int = 120) -> list[dict]:
+        """Photographs matching a description, through Immich's CLIP search.
+
+        This is the only way to put the cat on the frame: Immich clusters human
+        faces, so a pet has no person to select. "cat" finds him; so do
+        "beach", "snow" and "birthday cake".
+
+        Ranked by relevance rather than shuffled, so the pool is trimmed to the
+        best `want` matches. Taking everything would let a loose query pull in
+        the whole library at the tail end of the ranking, which is how a smart
+        search quietly becomes Random.
+        """
+        out: list[dict] = []
+        page: int | str | None = 1
+        while page and len(out) < want:
+            body = {"query": query, "size": 100, "page": int(page),
+                    "withExif": True}
+            assets = self._call("/api/search/smart", body).get("assets", {})
+            for asset in assets.get("items", []):
+                exif = asset.get("exifInfo") or {}
+                if landscape_only and is_landscape(exif) is not True:
+                    continue
+                if not has_camera(exif):
+                    continue
+                out.append(asset)
+            page = assets.get("nextPage")
+        return out[:want]
+
     def preview(self, asset_id: str) -> Image.Image:
         """Immich's preview render, which is already orientation-corrected."""
         data = self._call(f"/api/assets/{asset_id}/thumbnail?size=preview", raw=True)

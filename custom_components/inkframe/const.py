@@ -24,6 +24,7 @@ SOURCE_RANDOM = "Random"
 SOURCE_RECENT = "Recent"
 SOURCE_PEOPLE = "People"
 SOURCE_ALBUM = "Album"
+SOURCE_SEARCH = "Search"
 NO_ALBUMS = "(no albums in Immich)"
 
 # Settings exposed as numbers. Contrast and candidates are deliberately NOT

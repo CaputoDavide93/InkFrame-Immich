@@ -16,7 +16,8 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: InkFrameConfigEntry, add: AddEntitiesCallback
 ) -> None:
     coordinator = entry.runtime_data
-    entities: list[SwitchEntity] = [RequireCameraSwitch(coordinator)]
+    entities: list[SwitchEntity] = [RequireCameraSwitch(coordinator),
+                                   PortraitsSwitch(coordinator)]
     # One switch per person who has enough photos. Home Assistant has no
     # multi-select entity; a row of switches is the native way to say "these
     # people". Someone who becomes eligible later appears after a reload.
@@ -48,6 +49,34 @@ class RequireCameraSwitch(InkFrameEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.async_set_settings(require_camera=0)
+
+
+class PortraitsSwitch(InkFrameEntity, SwitchEntity):
+    """On: portraits are cropped to fit the landscape panel, with the window
+    placed on the faces Immich found. Off: they are skipped entirely.
+
+    The server setting is `landscape_only`, which is the inverse, because it
+    describes what the filter does. This entity is named for what a person
+    wants: whether portraits appear on the wall.
+    """
+
+    _attr_name = "Portraits"
+    _attr_icon = "mdi:crop-portrait"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "portraits")
+
+    @property
+    def is_on(self) -> bool | None:
+        value = self.coordinator.settings.get("landscape_only")
+        return (not value) if value is not None else None
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_settings(landscape_only=0)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_settings(landscape_only=1)
 
 
 class IncludePersonSwitch(InkFrameEntity, SwitchEntity):
