@@ -36,6 +36,9 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          # The domain is not yet in home-assistant/brands; that is a separate
+          # pull request there. Every other HACS check runs.
+          ignore: brands
 
   firmware:
     name: ESPHome config validates
