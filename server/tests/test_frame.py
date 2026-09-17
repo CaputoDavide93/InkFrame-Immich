@@ -171,28 +171,27 @@ def test_the_panels_generation_is_never_evicted():
     assert 2 not in store.generations and 3 not in store.generations
 
 
+def _store(tmp_path):
+    import threading
+    import app
+    st = app.FrameStore.__new__(app.FrameStore)
+    st.source = type("S", (), {"path": str(tmp_path / "state.json")})()
+    st.lock = threading.Lock()
+    st.generations, st.meta, st.encoded = {}, {}, {}
+    st.current = 0
+    st.fetched_generation, st.fetched_at = 0, None
+    return st
+
+
 def test_a_saved_frame_survives_a_restart(tmp_path):
     """Before this, a restart left generation 0 and every image route
-    answering 500. With a source that has run dry -- an album with nothing in
-    it yet -- nothing would ever render, so the panel's next wake got nothing
-    and the dashboard cards stayed blank."""
-    import app
-
-    store = app.FrameStore.__new__(app.FrameStore)
-    store.source = type("S", (), {"path": str(tmp_path / "state.json")})()
-    store.lock = __import__("threading").Lock()
-    store.generations, store.meta, store.encoded = {}, {}, {}
-    store.current = 0
-
+    answering 500, indefinitely when the source had run dry."""
+    store = _store(tmp_path)
     payload = bytes(FRAME_BYTES)
-    store._persist(payload, {"name": "kept.jpg"})
+    store._persist(payload, {"name": "kept.jpg", "asset_id": "a1"})
 
-    revived = app.FrameStore.__new__(app.FrameStore)
-    revived.source = store.source
-    revived.generations, revived.meta = {}, {}
-    revived.current = 0
+    revived = _store(tmp_path)
     revived._restore()
-
     assert revived.current == 1
     assert revived.generations[1] == payload
     assert revived.meta[1]["name"] == "kept.jpg"
@@ -258,36 +257,62 @@ def test_asking_for_a_generation_that_is_gone_is_an_error_not_another_photo():
 
 
 def test_the_panel_having_collected_a_frame_survives_a_restart(tmp_path):
-    """Otherwise the renderer restarts, 'On the panel' reads unknown and 'Up
-    next' claims a photo is waiting, while the wall has not changed at all."""
-    import threading
-    import app
-
-    store = app.FrameStore.__new__(app.FrameStore)
-    store.source = type("S", (), {"path": str(tmp_path / "state.json")})()
-    store.lock = threading.Lock()
+    """Otherwise the renderer restarts, `On the panel` reads unknown and
+    `Up next` claims a photo is waiting, while the wall has not changed."""
+    store = _store(tmp_path)
     store.generations = {4: bytes(FRAME_BYTES)}
-    store.meta = {4: {"name": "onwall.jpg"}}
-    store.encoded = {}
+    store.meta = {4: {"name": "onwall.jpg", "asset_id": "a1"}}
     store.current = 4
-    store.fetched_generation = 0
-    store.fetched_at = None
-
+    store._persist(store.generations[4], dict(store.meta[4]))
     store.note_panel_fetch(4)
 
-    revived = app.FrameStore.__new__(app.FrameStore)
-    revived.source = store.source
-    revived.generations, revived.meta = {}, {}
-    revived.current = 0
-    revived.fetched_generation = 0
-    revived.fetched_at = None
+    revived = _store(tmp_path)
     revived._restore()
-
-    assert revived.current == 1
     assert revived.fetched_generation == 1, "the panel's photo came back as not collected"
     assert revived.fetched_at is not None
     assert revived.meta[1]["name"] == "onwall.jpg"
     assert "_was_on_panel" not in revived.meta[1], "internal bookkeeping leaked into /status"
+
+
+def test_a_render_after_a_collection_keeps_both_pictures(tmp_path):
+    """The case that sent `On the panel` blank in production: the panel
+    collected a photo, a newer one was rendered, and the restart kept only the
+    newer. The card then described a wall it had no picture of, for as long as
+    three days until the next wake."""
+    on_wall, waiting = bytes(FRAME_BYTES), bytes([0xFF]) * FRAME_BYTES
+    store = _store(tmp_path)
+    store.generations = {1: on_wall}
+    store.meta = {1: {"name": "onwall.jpg", "asset_id": "a1"}}
+    store.current = 1
+    store._persist(on_wall, dict(store.meta[1]))
+    store.note_panel_fetch(1)                      # the panel collects it
+    store.generations[2] = waiting
+    store.meta[2] = {"name": "waiting.jpg", "asset_id": "a2"}
+    store.current = 2
+    store._persist(waiting, dict(store.meta[2]))   # a newer render lands
+
+    revived = _store(tmp_path)
+    revived._restore()
+    assert revived.meta[revived.fetched_generation]["name"] == "onwall.jpg"
+    assert revived.generations[revived.fetched_generation] == on_wall
+    assert revived.meta[revived.current]["name"] == "waiting.jpg"
+    assert revived.current != revived.fetched_generation, "a waiting photo read as collected"
+
+
+def test_one_picture_collected_restores_as_one_generation(tmp_path):
+    """When the panel has the newest photo there is nothing waiting, and
+    `on_panel` must read true rather than inventing a second generation."""
+    frame = bytes(FRAME_BYTES)
+    store = _store(tmp_path)
+    store.generations = {3: frame}
+    store.meta = {3: {"name": "same.jpg", "asset_id": "a1"}}
+    store.current = 3
+    store._persist(frame, dict(store.meta[3]))
+    store.note_panel_fetch(3)
+
+    revived = _store(tmp_path)
+    revived._restore()
+    assert revived.current == revived.fetched_generation == 1
 
 
 def test_restarting_does_not_consume_a_photo():

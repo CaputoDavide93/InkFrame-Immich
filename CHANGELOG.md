@@ -29,6 +29,10 @@ All notable changes to this project are recorded here. The format follows
   `assetCount` but no `assets` key, so album assets came back empty and the
   renderer blamed the library. They are fetched through `/api/search/metadata`
   with `albumIds` now.
+- **A restart blanked `On the panel`** whenever a newer photo had been
+  rendered since the panel collected one: only the newest frame was saved, so
+  the collected picture was lost and the card had nothing to show until the
+  next wake, up to three days later. The panel's frame now has its own slot.
 - **A restart lost the picture**, leaving every image route answering 500 until
   something rendered, which with a source that had run dry was indefinitely.
 - **A restart consumed a photo.** Start-up keeps a restored frame rather than

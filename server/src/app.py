@@ -257,43 +257,76 @@ class FrameStore:
     # narrow source that has run dry -- an album with nothing in it yet -- that
     # is indefinitely, and the panel's next wake gets nothing at all.
 
-    def _frame_path(self) -> str:
-        return os.path.join(os.path.dirname(self.source.path) or "/data", "frame.bin")
+    def _frame_path(self, slot: str = "frame") -> str:
+        """Two slots, because the newest frame and the one on the wall are
+        different pictures whenever a render has happened since the panel last
+        woke -- which on a three-day cycle is most of the time.
 
-    def _restore(self) -> None:
+        Saving only the newest lost the collected one on every restart, and
+        `On the panel` went blank until the panel's next wake, days away. It
+        said unknown rather than showing the wrong photo, which was the right
+        failure, but it is still a blank card describing a wall that has a
+        picture on it.
+        """
+        return os.path.join(os.path.dirname(self.source.path) or "/data", f"{slot}.bin")
+
+    def _read_slot(self, slot: str) -> tuple[bytes, dict] | None:
         try:
-            with open(self._frame_path(), "rb") as handle:
+            with open(self._frame_path(slot), "rb") as handle:
                 payload = handle.read()
-            meta_path = self._frame_path() + ".json"
-            meta = {}
-            if os.path.exists(meta_path):
-                with open(meta_path) as handle:
-                    meta = json.load(handle)
-            if len(payload) != FRAME_BYTES:
-                LOG.warning("saved frame is %d bytes, not %d; ignoring",
-                            len(payload), FRAME_BYTES)
-                return
-            self.current = 1
-            self.generations[1] = payload
-            self.meta[1] = {k: v for k, v in meta.items() if not k.startswith("_")}
-            # Whether the panel had collected it matters as much as the picture.
-            # Without this the renderer restarts, `On the panel` reads unknown
-            # and `Up next` claims something is waiting, while the wall has not
-            # changed at all. The generation numbering restarts at 1, so the
-            # flag is carried rather than the old number.
-            if meta.get("_was_on_panel"):
-                self.fetched_generation = 1
-                self.fetched_at = meta.get("_fetched_at")
-            LOG.info("restored the last frame: %s (on the panel: %s)",
-                     meta.get("name", "unknown"), bool(meta.get("_was_on_panel")))
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            LOG.warning("could not read the %s frame: %s", slot, exc)
+            return None
+        if len(payload) != FRAME_BYTES:
+            LOG.warning("saved %s frame is %d bytes, not %d; ignoring",
+                        slot, len(payload), FRAME_BYTES)
+            return None
+        meta: dict = {}
+        try:
+            with open(self._frame_path(slot) + ".json") as handle:
+                meta = json.load(handle)
         except FileNotFoundError:
             pass
-        except Exception as exc:  # noqa: BLE001 - a bad file must not stop the frame
-            LOG.warning("could not restore the last frame: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - a bad sidecar loses the caption, not the picture
+            LOG.warning("could not read the %s frame's details: %s", slot, exc)
+        return payload, meta
 
-    def _persist(self, payload: bytes, meta: dict) -> None:
+    def _restore(self) -> None:
+        """Rebuild both pictures. Generation numbering restarts, so the panel's
+        frame takes 1 and the newest takes 2 when they differ -- `on_panel`
+        then reports false, which is the truth: a newer photo is waiting."""
         try:
-            path = self._frame_path()
+            panel = self._read_slot("panel")
+            latest = self._read_slot("frame")
+            if panel:
+                payload, meta = panel
+                self.current = 1
+                self.generations[1] = payload
+                self.meta[1] = {k: v for k, v in meta.items() if not k.startswith("_")}
+                self.fetched_generation = 1
+                self.fetched_at = meta.get("_fetched_at")
+            if latest:
+                payload, meta = latest
+                same = bool(panel) and meta.get("asset_id") == panel[1].get("asset_id")
+                generation = 1 if (same or not panel) else 2
+                self.current = generation
+                self.generations[generation] = payload
+                self.meta[generation] = {k: v for k, v in meta.items() if not k.startswith("_")}
+                if not panel and meta.get("_was_on_panel"):
+                    self.fetched_generation = 1
+                    self.fetched_at = meta.get("_fetched_at")
+            if panel or latest:
+                LOG.info("restored: on the panel %r, up next %r",
+                         (panel[1].get("name") if panel else None),
+                         (latest[1].get("name") if latest else None))
+        except Exception as exc:  # noqa: BLE001 - a bad file must not stop the frame
+            LOG.warning("could not restore the saved frames: %s", exc)
+
+    def _persist(self, payload: bytes, meta: dict, slot: str = "frame") -> None:
+        try:
+            path = self._frame_path(slot)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             # Write then replace, so a restart mid-write cannot leave a
             # half-written frame that restores as a band of noise.
@@ -304,7 +337,7 @@ class FrameStore:
                 json.dump(meta, handle)
             os.replace(path + ".json.tmp", path + ".json")
         except OSError as exc:
-            LOG.warning("could not persist the frame: %s", exc)
+            LOG.warning("could not persist the %s frame: %s", slot, exc)
 
     def count_people(self) -> None:
         try:
@@ -548,9 +581,10 @@ class FrameStore:
             saved = dict(self.meta.get(generation, {}))
             saved["_was_on_panel"] = True
             saved["_fetched_at"] = self.fetched_at
-        # Re-save so a restart still knows the panel is showing this frame.
+        # Its own slot, so a later render cannot overwrite the picture that is
+        # actually on the wall.
         if payload is not None:
-            self._persist(payload, saved)
+            self._persist(payload, saved, slot="panel")
 
     def get(self, generation: int | None) -> tuple[int, bytes]:
         """The frame for a generation, or the current one when asked for None.

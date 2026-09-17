@@ -17,8 +17,17 @@ docker compose logs -f
 
 ## State
 
-`/data/state.json` holds the source selection and every runtime setting, and
-`/data/frame.bin` holds the last rendered frame with a small `.json` beside it.
+`/data/state.json` holds the source selection and every runtime setting.
+Two frames are saved beside it, each with a small `.json`: `frame.bin` is the
+newest render, and `panel.bin` is the one the panel actually collected. They
+are different pictures whenever something has rendered since the panel last
+woke, which on a three-day cycle is most of the time.
+
+Saving only the newest lost the collected one on every restart, and
+`On the panel` in Home Assistant went blank until the panel's next wake, days
+away. It read unknown rather than showing the wrong photo, which was the right
+failure, but a blank card describing a wall with a picture on it is still
+wrong.
 
 The frame is saved for a reason worth knowing: before it was, a restart left
 the renderer with nothing to serve, every image route answered 500, and with a
