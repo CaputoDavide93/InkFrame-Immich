@@ -134,6 +134,7 @@ Every knob has a sensible default. Home Assistant can change the ones marked ✅
 | `candidates` | int | 1 to 60 | Photos downloaded and scored per pick. Not exposed in Home Assistant |  |
 | `max_busyness` | float | 1.0 to 100.0 | Reject anything scoring above this | ✅ |
 | `require_camera` | bool | on / off | Only assets with a camera make in EXIF | ✅ |
+| `landscape_only` | bool | on / off | Skip portraits. Off means they are cropped to fit, with the window placed on the faces Immich found | ✅ |
 | `sleep_hours` | float | 1 to 336 | Delivered to the panel on `/wake` | ✅ |
 | `ota_window_seconds` | int | 5 to 300 | Delivered to the panel on `/wake` | ✅ |
 <!-- /AUTOGEN:settings -->
@@ -148,6 +149,7 @@ Environment variables set the defaults for a fresh install. The full list, gener
 |---|---|---|
 | 🔄 | **Landscape by orientation, not by dimensions** | Immich reports the stored EXIF width and height. Orientation values 5 to 8 transpose the image, so a photo stored 4032x3024 with `orientation: 6` renders portrait. On the library this was built against, `width > height` alone was wrong for 86% of photos |
 | 📷 | **Taken by a camera** | `exifInfo.make` is set by every phone and camera and by nothing else. It keeps screenshots, memes and downloads off the wall without guessing at filenames |
+| 🖼️ | **Portraits cropped, not skipped** | The panel is landscape. A portrait is cropped to 800x480 with the window placed on the faces Immich detected, so a close-up keeps its chin and a full-body shot keeps its body. Turn **Portraits** on to skip them instead |
 | 🌾 | **Calm enough to dither** | Mean absolute Laplacian over the cropped frame. Grass and foliage score high and turn into speckle under any algorithm; a subject against a plain wall scores low and survives. The renderer scores twenty candidates and shows the calmest |
 
 Sources you can choose from Home Assistant: **Random**, **Recent** (last N days), **People** (any of the people you tick, not only photos with all of them), **Album**, or one named person. A person is offered only above a minimum number of landscape photographs, because a source that runs dry repeats itself.

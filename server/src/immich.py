@@ -101,7 +101,8 @@ class Immich:
 
     def candidates(self, pool: int = 100, rounds: int = 4, want: int = 20,
                    exclude: set[str] | None = None,
-                   require_camera: bool = True) -> list[dict]:
+                   require_camera: bool = True,
+                   landscape_only: bool = True) -> list[dict]:
         """Landscape photographs, before the expensive per-pixel scoring.
 
         Only ~13.5% of this library is landscape and ~8% of those are
@@ -121,7 +122,7 @@ class Immich:
                 if asset["id"] in exclude:
                     continue
                 exif = asset.get("exifInfo") or {}
-                if is_landscape(exif) is not True:
+                if landscape_only and is_landscape(exif) is not True:
                     continue
                 if require_camera and not has_camera(exif):
                     continue
@@ -137,7 +138,7 @@ class Immich:
         rows = data.get("people", data) if isinstance(data, dict) else data
         return {p["name"]: p["id"] for p in rows if p.get("name")}
 
-    def by_person(self, person_id: str, max_pages: int = 8) -> list[dict]:
+    def by_person(self, person_id: str, max_pages: int = 8, landscape_only: bool = True) -> list[dict]:
         """Every landscape photograph of one person.
 
         `total` in a search response counts the page, not the result set, so it
@@ -152,12 +153,12 @@ class Immich:
             assets = self._call("/api/search/metadata", body).get("assets", {})
             for asset in assets.get("items", []):
                 exif = asset.get("exifInfo") or {}
-                if is_landscape(exif) is True and has_camera(exif):
+                if (not landscape_only or is_landscape(exif) is True) and has_camera(exif):
                     out.append(asset)
             page = assets.get("nextPage")
         return out
 
-    def recent(self, days: int = 90, max_pages: int = 6) -> list[dict]:
+    def recent(self, days: int = 90, max_pages: int = 6, landscape_only: bool = True) -> list[dict]:
         """Landscape photographs taken in the last N days."""
         import datetime
         after = (datetime.datetime.now(datetime.timezone.utc)
@@ -170,7 +171,7 @@ class Immich:
             assets = self._call("/api/search/metadata", body).get("assets", {})
             for asset in assets.get("items", []):
                 exif = asset.get("exifInfo") or {}
-                if is_landscape(exif) is True and has_camera(exif):
+                if (not landscape_only or is_landscape(exif) is True) and has_camera(exif):
                     out.append(asset)
             page = assets.get("nextPage")
         return out
@@ -181,16 +182,50 @@ class Immich:
         rows = self._call("/api/albums")
         return {a["albumName"]: a["id"] for a in rows if a.get("albumName")}
 
-    def by_album(self, album_id: str) -> list[dict]:
-        """Every landscape photograph in one album. /api/albums/{id} returns
-        the assets inline with their EXIF, no paging."""
-        data = self._call(f"/api/albums/{album_id}")
+    def by_album(self, album_id: str, landscape_only: bool = True,
+                 max_pages: int = 8) -> list[dict]:
+        """Photographs in one album.
+
+        Via search, NOT `/api/albums/{id}`: that endpoint returns the album's
+        metadata and `assetCount` but no `assets` key at all, so reading assets
+        from it silently yielded an empty list and the frame reported "no
+        landscape photographs" about an album with sixteen in it. Blaming the
+        library for a missing key is exactly the kind of error that sends
+        somebody looking in the wrong place.
+
+        A curated album is a deliberate choice, so the camera filter is not
+        applied here: a scanned picture somebody added on purpose belongs on
+        the wall. Orientation still applies, unless portraits are being
+        cropped to fit.
+        """
         out: list[dict] = []
-        for asset in data.get("assets", []):
-            exif = asset.get("exifInfo") or {}
-            if is_landscape(exif) is True and has_camera(exif):
+        page: int | str | None = 1
+        while page and int(page) <= max_pages:
+            body = {"albumIds": [album_id], "size": 250, "page": int(page),
+                    "withExif": True}
+            assets = self._call("/api/search/metadata", body).get("assets", {})
+            for asset in assets.get("items", []):
+                exif = asset.get("exifInfo") or {}
+                if landscape_only and is_landscape(exif) is not True:
+                    continue
                 out.append(asset)
+            page = assets.get("nextPage")
         return out
+
+    def faces(self, asset_id: str) -> list[dict]:
+        """Face boxes for one asset, in the coordinate space of the ORIGINAL
+        image. Immich reports `imageWidth`/`imageHeight` alongside each box so
+        the caller can scale them onto whatever rendition it downloaded.
+
+        Never raises: a frame without face data still renders, it just falls
+        back to a centred crop. Needs the `face.read` permission on the key.
+        """
+        try:
+            rows = self._call(f"/api/faces?id={asset_id}")
+        except Exception as exc:  # noqa: BLE001 - cropping is better than failing
+            LOG.warning("faces unavailable for %s: %s", asset_id[:8], exc)
+            return []
+        return rows if isinstance(rows, list) else []
 
     def preview(self, asset_id: str) -> Image.Image:
         """Immich's preview render, which is already orientation-corrected."""
@@ -229,8 +264,74 @@ def _s_curve(arr: np.ndarray, amount: float = 0.35) -> np.ndarray:
     return np.clip(x - amount * np.sin(2 * np.pi * x) / (2 * np.pi), 0, 1) * 255
 
 
+def crop_box(img_w: int, img_h: int, faces: list[dict] | None = None,
+             aspect: float = PANEL_W / PANEL_H) -> tuple[int, int, int, int]:
+    """The 800x480-shaped window to take out of an image.
+
+    With faces, the window is placed so every face fits and their centre of
+    mass sits about a third of the way down, which is where a portrait wants
+    its subject. Without faces it is a centred crop biased slightly high,
+    because heads and horizons both sit above the middle.
+
+    This is what lets a portrait onto a landscape panel at all: scaling one to
+    fit would use 45% of the glass, and a plain centre crop of a standing
+    person takes their chest.
+    """
+    if img_w / img_h >= aspect:                      # already wide enough
+        box_h = img_h
+        box_w = min(img_w, int(round(img_h * aspect)))
+    else:
+        box_w = img_w
+        box_h = min(img_h, int(round(img_w / aspect)))
+
+    if faces:
+        # Face boxes arrive in the original image's coordinates; scale them.
+        src_w = faces[0].get("imageWidth") or img_w
+        src_h = faces[0].get("imageHeight") or img_h
+        sx, sy = img_w / src_w, img_h / src_h
+        xs1 = [f["boundingBoxX1"] * sx for f in faces if "boundingBoxX1" in f]
+        xs2 = [f["boundingBoxX2"] * sx for f in faces if "boundingBoxX2" in f]
+        ys1 = [f["boundingBoxY1"] * sy for f in faces if "boundingBoxY1" in f]
+        ys2 = [f["boundingBoxY2"] * sy for f in faces if "boundingBoxY2" in f]
+        if xs1 and ys1:
+            fx = (min(xs1) + max(xs2)) / 2
+            fy = (min(ys1) + max(ys2)) / 2
+            left = fx - box_w / 2
+            # Where to put the face vertically depends on how much of the
+            # frame it fills. A small face means a full-body or group shot, and
+            # a third of the way down leaves room for the body. A face filling
+            # the crop is a close-up, and thirding it pushes the chin out of
+            # frame -- seen on a real photo, which is why this is not a
+            # constant. Blend between the two rather than switching, so a
+            # mid-sized face does not jump.
+            face_h = max(ys2) - min(ys1)
+            fill = (face_h / box_h) if box_h else 0.0
+            # Below 35% of the crop's height the subject has a body worth
+            # showing, so the face goes a third down. Above 70% it is a
+            # close-up and centring is the only way to keep the chin. In
+            # between, slide, so no photo jumps between the two rules.
+            ramp = min(1.0, max(0.0, (fill - 0.35) / 0.35))
+            placement = (1 / 3) + (0.5 - 1 / 3) * ramp
+            top = fy - box_h * placement
+            # Widen to contain every face if they are spread out.
+            if max(xs2) - min(xs1) < box_w:
+                left = min(left, min(xs1))
+                left = max(left, max(xs2) - box_w)
+            if max(ys2) - min(ys1) < box_h:
+                top = min(top, min(ys1))
+                top = max(top, max(ys2) - box_h)
+            left = int(round(max(0, min(left, img_w - box_w))))
+            top = int(round(max(0, min(top, img_h - box_h))))
+            return left, top, left + box_w, top + box_h
+
+    left = (img_w - box_w) // 2
+    top = int(round((img_h - box_h) * 0.38))         # slightly above centre
+    return left, top, left + box_w, top + box_h
+
+
 def render(img: Image.Image, smooth: float = 0.45, curve: float = 0.35,
-           edge: int = 55, contrast: float = 1.05) -> Image.Image:
+           edge: int = 55, contrast: float = 1.05,
+           faces: list[dict] | None = None) -> Image.Image:
     """Photo -> 1-bit Floyd-Steinberg frame at exactly 800x480.
 
     Order matters: crop, autocontrast, flatten texture, push tones off
@@ -239,9 +340,10 @@ def render(img: Image.Image, smooth: float = 0.45, curve: float = 0.35,
     turned grass into a field of specks -- the complaint that prompted this.
     """
     img = ImageOps.exif_transpose(img).convert("L")
-    # Centre slightly above the middle: faces and horizons both sit high.
-    img = ImageOps.fit(img, (PANEL_W, PANEL_H), method=Image.LANCZOS,
-                       centering=(0.5, 0.42))
+    # Crop first, then scale. ImageOps.fit would centre a portrait's crop on
+    # the middle of the frame, which for a standing subject is their chest.
+    img = img.crop(crop_box(img.width, img.height, faces))
+    img = img.resize((PANEL_W, PANEL_H), Image.LANCZOS)
     img = ImageOps.autocontrast(img, cutoff=1)
     if contrast != 1.0:
         img = ImageEnhance.Contrast(img).enhance(contrast)

@@ -98,3 +98,17 @@ def test_screenshots_and_downloads_are_rejected(exif):
     precisely because they have none, so the busyness score alone would have
     promoted it."""
     assert has_camera(exif) is False
+
+
+def test_album_assets_are_fetched_by_search_not_from_the_album_endpoint():
+    """`/api/albums/{id}` returns assetCount but NO assets key, so reading
+    assets from it yields an empty list and the frame reports an empty album
+    while Immich shows sixteen photos in it. Verified against Immich on
+    2026-09-17."""
+    import inspect
+    from immich import Immich
+
+    source = inspect.getsource(Immich.by_album)
+    assert "/api/search/metadata" in source
+    assert "albumIds" in source
+    assert '_call(f"/api/albums/{album_id}")' not in source

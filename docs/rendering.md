@@ -2,6 +2,49 @@
 
 A one-bit 800x480 panel at about 133 DPI can show a good photograph. It cannot show every photograph. This page is about choosing well and then not ruining the choice.
 
+## Portraits, and the panel's shape
+
+The panel is landscape. A 3:4 portrait scaled to fit its height uses 45% of the
+glass, so for a long time portraits were simply skipped. They are not any more:
+the renderer crops an 800x480 window out of them and places it on the faces
+Immich has already detected.
+
+```mermaid
+flowchart LR
+    P["portrait 1440x1920"] --> F{"faces from<br/>/api/faces?"}
+    F -->|yes| A["window placed on them"]
+    F -->|no| B["window centred,<br/>biased above middle"]
+    A --> C["800x480"]
+    B --> C
+```
+
+Where the face sits vertically depends on how much of the window it fills:
+
+| Face fills | Placed | Why |
+|---|---|---|
+| under 35% | a third down | a full-body or group shot; leaves room for the body |
+| 35% to 70% | slides between | so a mid-sized face does not jump between two rules |
+| over 70% | centred | a close-up; thirding it pushes the chin out of frame |
+
+That ramp is not decoration. Thirding was the only rule at first, and on a real
+close-up it cut the chin off.
+
+Two more properties the tests pin, both learned the same way:
+
+- **The window never leaves the image.** A face near an edge would otherwise
+  produce a negative offset, which renders as a black band.
+- **Face boxes are scaled from the original to the rendition.** Immich reports
+  boxes against the full-size asset and `imageWidth`/`imageHeight` alongside
+  them; the renderer works on a preview. Ignoring the scale crops the wrong
+  part of the photo entirely.
+
+Cropping needs the `face.read` permission on the API key. Without it the boxes
+come back empty, the crop falls back to centred, and nothing breaks.
+
+Set `landscape_only` (**Portraits** in Home Assistant) to keep skipping them.
+
+---
+
 ## Three filters, then a score
 
 ```mermaid
@@ -16,6 +59,9 @@ flowchart LR
 ```
 
 ### Landscape by orientation
+
+Applied only while `landscape_only` is on. With portraits cropped it is off,
+and this filter does nothing.
 
 Immich reports `exifImageWidth` and `exifImageHeight` as stored in the file. EXIF orientation values 5, 6, 7 and 8 rotate the image by 90 degrees on display, so a photo stored 4032x3024 with `orientation: 6` is a portrait. The rule is
 

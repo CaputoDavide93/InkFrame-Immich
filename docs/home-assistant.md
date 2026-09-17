@@ -25,7 +25,9 @@ The poll interval is an option on the integration; the default is 300 seconds.
 | **OTA window** | number, seconds | How long the panel stays reachable after drawing. Config section |
 | **Smooth**, **Tone curve**, **Edge** | number | Render treatment. Config section |
 | **Photographs only** | switch | The EXIF camera filter. Config section |
-| **Preview** | image | The one-bit frame the panel will collect |
+| **On the panel** | image | The photo the panel fetched: what is on the wall |
+| **Up next** | image | The most recent render, which the panel collects at its next wake |
+| **Portraits** | switch | Off: portraits are cropped to fit. On: they are skipped |
 | **Photo** | sensor | Filename, with taken date, source and busyness as attributes |
 | **Busyness** | sensor | The chosen photo's score |
 | **On panel** | binary sensor | Whether the panel has collected the rendered frame |
@@ -41,6 +43,21 @@ Contrast and the candidate count are deliberately not exposed. Contrast overlaps
 **People** is a union. Tick the people you want and the frame draws from photos of any of them. Immich's own multi-person search is an intersection, photos containing everyone at once, which is rarely what "photos of the kids" means, so the renderer queries each person and merges.
 
 A person is offered only above a minimum number of landscape photographs (20 by default, `MIN_PERSON_PHOTOS` on the renderer). Below that a source runs dry against the recently-shown list and repeats. The renderer counts each named person's eligible photos in the background once a day; the counts are attributes on the Source select.
+
+## Two pictures, and why
+
+**On the panel** and **Up next** usually show the same photograph. They differ
+from the moment something renders a new one until the panel next wakes, which
+on a weekly cycle is days. That gap is the point: e-paper holds its last image
+with no power, so nothing about the wall tells you a newer photo is waiting.
+
+`On the panel` reads unknown when the panel has not collected anything since
+the renderer last started. That is honest rather than broken: it would rather
+say nothing than show you a photo that is not on your wall.
+
+Each card asks for its frame **by generation number**. A generation the
+renderer no longer holds is a 404, never a substitute photo, which is the whole
+reason the numbers exist.
 
 ## Rendered is not displayed
 

@@ -35,6 +35,7 @@ Runtime settings, readable and writable through `/settings`, persisted in the st
 | `candidates` | int | 1 to 60 | Photos downloaded and scored per pick. Not exposed in Home Assistant |  |
 | `max_busyness` | float | 1.0 to 100.0 | Reject anything scoring above this | ✅ |
 | `require_camera` | bool | on / off | Only assets with a camera make in EXIF | ✅ |
+| `landscape_only` | bool | on / off | Skip portraits. Off means they are cropped to fit, with the window placed on the faces Immich found | ✅ |
 | `sleep_hours` | float | 1 to 336 | Delivered to the panel on `/wake` | ✅ |
 | `ota_window_seconds` | int | 5 to 300 | Delivered to the panel on `/wake` | ✅ |
 <!-- /AUTOGEN:settings -->
@@ -62,6 +63,7 @@ Defaults for a fresh install. A value set through `/settings` is persisted and w
 | `CANDIDATES` | Default for `candidates` (not exposed in Home Assistant) | `20` |
 | `MAX_BUSYNESS` | Default for `max_busyness` | `22` |
 | `REQUIRE_CAMERA` | Default for `require_camera`; `0` to allow non-camera images | `1` |
+| `LANDSCAPE_ONLY` | Default for `landscape_only`; `0` to crop portraits instead of skipping them | `1` |
 | `SLEEP_HOURS` | Default for `sleep_hours` | `168` |
 | `OTA_WINDOW_SECONDS` | Default for `ota_window_seconds` | `20` |
 | `HEARTBEAT_FILE` | Touched every 30 s; for external liveness checks | `/tmp/immichframe-heartbeat` |

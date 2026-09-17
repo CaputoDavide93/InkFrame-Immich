@@ -19,15 +19,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from urllib.parse import parse_qs, urlparse
 
-from immich import (FRAME_BYTES, Asset, Immich, detail_score, pack,
-                    render, to_bmp)
+from immich import (FRAME_BYTES, Asset, Immich, detail_score, is_landscape,
+                    pack, render, to_bmp)
 from immich import _INVERT
 
 LOG = logging.getLogger("immichframe")
 
+# Validated in main(), not here: a module that exits on import cannot be
+# imported by a test, and the tests for this file's own logic then have to
+# reach for a subprocess or fake the environment to say anything at all.
 IMMICH_URL = os.environ.get("IMMICH_URL", "").rstrip("/")
-if not IMMICH_URL:
-    raise SystemExit("IMMICH_URL must be set, e.g. http://immich.example.lan:2283")
 LISTEN_HOST = os.environ.get("LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8099"))
 # Photos not to show again until this many others have been through.
@@ -76,6 +77,10 @@ SETTING_SPEC: dict[str, tuple[type, float, float, object]] = {
     "candidates":   (int,   1,   60,   CANDIDATES),
     "max_busyness": (float, 1.0, 100.0, MAX_BUSYNESS),
     "require_camera": (bool, 0, 1,     REQUIRE_CAMERA),
+    # Off means portraits are cropped to fit rather than skipped. The crop
+    # window is placed on the faces Immich detected, so a standing subject
+    # keeps their head instead of being cut off at the chest.
+    "landscape_only": (bool, 0, 1,     os.environ.get("LANDSCAPE_ONLY", "1") != "0"),
     # Delivered to the panel on every /wake, so neither needs a reflash. Hours
     # rather than seconds because that is how anyone thinks about a photo
     # frame; the panel gets seconds.
@@ -218,7 +223,6 @@ class FrameStore:
         self.people_counted_at: float | None = None
         self.people_ready = threading.Event()
         self._albums: list[str] = []
-
         self.lock = threading.Lock()
         self.generations: dict[int, bytes] = {}
         # Encoded once per generation, not once per request. The panel fetches
@@ -230,6 +234,64 @@ class FrameStore:
         self.current = 0
         self.recent: deque[str] = deque(maxlen=RECENT_MEMORY)
         self.last_error: str | None = None
+        # Last, because it restores the state everything above declares.
+        self._restore()
+
+    # ── surviving a restart ───────────────────────────────────────────────
+    # The state file has always held the source and the settings. It did not
+    # hold the picture, so a container restart left generation 0 and every
+    # image route answering 500 until something rendered successfully. With a
+    # narrow source that has run dry -- an album with nothing in it yet -- that
+    # is indefinitely, and the panel's next wake gets nothing at all.
+
+    def _frame_path(self) -> str:
+        return os.path.join(os.path.dirname(self.source.path) or "/data", "frame.bin")
+
+    def _restore(self) -> None:
+        try:
+            with open(self._frame_path(), "rb") as handle:
+                payload = handle.read()
+            meta_path = self._frame_path() + ".json"
+            meta = {}
+            if os.path.exists(meta_path):
+                with open(meta_path) as handle:
+                    meta = json.load(handle)
+            if len(payload) != FRAME_BYTES:
+                LOG.warning("saved frame is %d bytes, not %d; ignoring",
+                            len(payload), FRAME_BYTES)
+                return
+            self.current = 1
+            self.generations[1] = payload
+            self.meta[1] = {k: v for k, v in meta.items() if not k.startswith("_")}
+            # Whether the panel had collected it matters as much as the picture.
+            # Without this the renderer restarts, `On the panel` reads unknown
+            # and `Up next` claims something is waiting, while the wall has not
+            # changed at all. The generation numbering restarts at 1, so the
+            # flag is carried rather than the old number.
+            if meta.get("_was_on_panel"):
+                self.fetched_generation = 1
+                self.fetched_at = meta.get("_fetched_at")
+            LOG.info("restored the last frame: %s (on the panel: %s)",
+                     meta.get("name", "unknown"), bool(meta.get("_was_on_panel")))
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001 - a bad file must not stop the frame
+            LOG.warning("could not restore the last frame: %s", exc)
+
+    def _persist(self, payload: bytes, meta: dict) -> None:
+        try:
+            path = self._frame_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            # Write then replace, so a restart mid-write cannot leave a
+            # half-written frame that restores as a band of noise.
+            with open(path + ".tmp", "wb") as handle:
+                handle.write(payload)
+            os.replace(path + ".tmp", path)
+            with open(path + ".json.tmp", "w") as handle:
+                json.dump(meta, handle)
+            os.replace(path + ".json.tmp", path + ".json")
+        except OSError as exc:
+            LOG.warning("could not persist the frame: %s", exc)
 
     def count_people(self) -> None:
         try:
@@ -275,8 +337,15 @@ class FrameStore:
 
         pool = self._pool()
         if not pool:
+            # Say which of the two it is. "No photographs" about an album that
+            # visibly holds sixteen sends somebody to check their album, when
+            # the truth was a filter -- or a bug in how they were fetched.
+            shape = ("nothing matched" if bool(self.source.settings["landscape_only"])
+                     else "the source is empty")
             raise RuntimeError(
-                f"no landscape photographs for source {self.source.describe()}")
+                f"{shape} for source {self.source.describe()}"
+                + (" (landscape_only is on, so portraits were skipped)"
+                   if bool(self.source.settings["landscape_only"]) else ""))
 
         scored: list[tuple[float, dict, object]] = []
         for asset in pool[:candidates]:
@@ -301,9 +370,19 @@ class FrameStore:
                       taken=exif.get("dateTimeOriginal") or chosen.get("fileCreatedAt"),
                       busyness=round(busyness, 1))
 
+        # Face boxes for the winner only. Scoring twenty candidates is already
+        # twenty downloads; asking Immich about faces for the nineteen that
+        # lose would be twenty more calls for nothing.
+        # For the winner only: scoring twenty candidates is already twenty
+        # downloads, and asking about faces for the nineteen that lose would
+        # double the call count for nothing. A 4:3 landscape is cropped to 5:3
+        # too, so faces help there as well, not only on portraits.
+        faces = self.client.faces(asset.id)
+
         started = time.monotonic()
         frame = render(img, smooth=float(cfg["smooth"]), curve=float(cfg["curve"]),
-                       edge=int(cfg["edge"]), contrast=float(cfg["contrast"]))
+                       edge=int(cfg["edge"]), contrast=float(cfg["contrast"]),
+                       faces=faces)
         payload = pack(frame)
         elapsed = time.monotonic() - started
 
@@ -316,20 +395,31 @@ class FrameStore:
                 "taken": asset.taken,
                 "busyness": asset.busyness,
                 "source": self.source.describe(),
+                "portrait": is_landscape(exif) is False,
+                "faces_used": len(faces),
                 "candidates_scored": len(scored),
                 "candidates_too_busy": rejected,
                 "settings": dict(cfg),
                 "rendered_at": time.time(),
                 "render_seconds": round(elapsed, 2),
             }
-            # Two generations is enough: one being served, one being fetched.
-            for stale in [g for g in self.generations if g < generation - 1]:
+            # Keep the new frame, the one before it, and whatever the panel is
+            # actually displaying. That last one is the point: press Next photo
+            # three times before a wake and the panel is three generations
+            # behind, so evicting by age alone would throw away the only copy
+            # of the picture hanging on the wall.
+            keep = {generation, generation - 1, self.fetched_generation}
+            for stale in [g for g in self.generations if g not in keep]:
                 self.generations.pop(stale, None)
                 self.meta.pop(stale, None)
-            for key in [k for k in self.encoded if k[0] < generation - 1]:
+            for key in [k for k in self.encoded if k[0] not in keep]:
                 self.encoded.pop(key, None)
             self.current = generation
             self.recent.append(asset.id)
+            saved = dict(self.meta[generation])
+            saved["_was_on_panel"] = False      # brand new, nobody has it yet
+            saved["_fetched_at"] = None
+        self._persist(payload, saved)
         LOG.info("gen %d: %s busyness %.1f (best of %d) in %.2fs",
                  generation, asset.name, busyness, len(scored), elapsed)
         _touch(LAST_OK)
@@ -346,6 +436,7 @@ class FrameStore:
         """
         import random as _random
         mode = self.source.mode
+        landscape_only = bool(self.source.settings["landscape_only"])
         if mode == "person":
             people = self.client.people()
             person_id = people.get(self.source.person)
@@ -354,8 +445,9 @@ class FrameStore:
                             "falling back to random", self.source.person)
                 return self.client.candidates(want=int(self.source.settings["candidates"]),
                                               exclude=set(self.recent),
-                                              require_camera=bool(self.source.settings["require_camera"]))
-            assets = self.client.by_person(person_id)
+                                              require_camera=bool(self.source.settings["require_camera"]),
+                                              landscape_only=landscape_only)
+            assets = self.client.by_person(person_id, landscape_only=landscape_only)
         elif mode == "people":
             # OR, not AND: photos of ANY chosen person. Immich's own multi-
             # person search is AND -- assets containing everyone at once --
@@ -368,7 +460,7 @@ class FrameStore:
                 if not pid:
                     LOG.warning("person %r is not a named face; skipping", name)
                     continue
-                for asset in self.client.by_person(pid):
+                for asset in self.client.by_person(pid, landscape_only=landscape_only):
                     if asset["id"] not in seen:
                         seen.add(asset["id"])
                         assets.append(asset)
@@ -377,7 +469,8 @@ class FrameStore:
                             self.source.people)
                 return self.client.candidates(want=int(self.source.settings["candidates"]),
                                               exclude=set(self.recent),
-                                              require_camera=bool(self.source.settings["require_camera"]))
+                                              require_camera=bool(self.source.settings["require_camera"]),
+                                              landscape_only=landscape_only)
         elif mode == "album":
             albums = self.client.albums()
             album_id = albums.get(self.source.album)
@@ -386,14 +479,16 @@ class FrameStore:
                             self.source.album)
                 return self.client.candidates(want=int(self.source.settings["candidates"]),
                                               exclude=set(self.recent),
-                                              require_camera=bool(self.source.settings["require_camera"]))
-            assets = self.client.by_album(album_id)
+                                              require_camera=bool(self.source.settings["require_camera"]),
+                                              landscape_only=landscape_only)
+            assets = self.client.by_album(album_id, landscape_only=landscape_only)
         elif mode == "recent":
-            assets = self.client.recent(days=self.source.days)
+            assets = self.client.recent(days=self.source.days, landscape_only=landscape_only)
         else:
             return self.client.candidates(want=int(self.source.settings["candidates"]),
                                           exclude=set(self.recent),
-                                          require_camera=bool(self.source.settings["require_camera"]))
+                                          require_camera=bool(self.source.settings["require_camera"]),
+                                          landscape_only=landscape_only)
 
         fresh = [a for a in assets if a["id"] not in self.recent]
         if not fresh and assets:
@@ -431,10 +526,28 @@ class FrameStore:
         with self.lock:
             self.fetched_generation = generation
             self.fetched_at = time.time()
+            payload = self.generations.get(generation)
+            saved = dict(self.meta.get(generation, {}))
+            saved["_was_on_panel"] = True
+            saved["_fetched_at"] = self.fetched_at
+        # Re-save so a restart still knows the panel is showing this frame.
+        if payload is not None:
+            self._persist(payload, saved)
 
     def get(self, generation: int | None) -> tuple[int, bytes]:
+        """The frame for a generation, or the current one when asked for None.
+
+        A generation that was asked for BY NUMBER and is no longer held raises.
+        It used to fall back to the newest frame, which meant `?gen=999` -- or
+        any evicted generation -- answered 200 with a different photo under the
+        caller's label. On a card captioned "On the panel" that is a lie about
+        what is hanging on the wall, which is the one thing this system exists
+        to get right.
+        """
         with self.lock:
-            if generation is None or generation not in self.generations:
+            if generation is not None and generation not in self.generations:
+                raise KeyError(generation)
+            if generation is None:
                 generation = self.current
             if generation not in self.generations:
                 raise RuntimeError("no frame rendered yet")
@@ -572,6 +685,7 @@ class Handler(BaseHTTPRequestHandler):
                              "on_panel": on_panel,
                              "panel_fetched_generation": store.fetched_generation,
                              "panel_fetched_at": store.fetched_at,
+                             "on_panel_photo": store.meta.get(store.fetched_generation, {}),
                              "recent_count": len(store.recent),
                              "settings": store.source.settings,
                              "people": store.people_summary(),
@@ -592,8 +706,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/frame.bin":
             store.ensure()
-            generation = query.get("gen", [None])[0]
-            generation, payload = store.get(int(generation) if generation else None)
+            asked = query.get("gen", [None])[0]
+            try:
+                generation, payload = store.get(int(asked) if asked else None)
+            except (KeyError, ValueError):
+                self._json(404, {"error": f"generation {asked} is no longer held"})
+                return
             store.note_panel_fetch(generation)
             offset = int(query.get("offset", ["0"])[0])
             length = int(query.get("len", [str(FRAME_BYTES)])[0])
@@ -608,7 +726,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/frame.png", "/frame.bmp", "/preview.png"):
             store.ensure()
-            gen, _ = store.get(None)
+            asked = query.get("gen", [None])[0]
+            try:
+                gen, _ = store.get(int(asked) if asked else None)
+            except (KeyError, ValueError):
+                # A generation that has been evicted, or one that never
+                # existed. Saying so beats serving a different photo under the
+                # caller's label.
+                self._json(404, {"error": f"generation {asked} is no longer held"})
+                return
             if path != "/preview.png":
                 # Only the panel fetches frame.*; /preview.png is for humans
                 # and must not claim the photo reached the glass.
@@ -629,6 +755,8 @@ def main() -> None:
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    if not IMMICH_URL:
+        raise SystemExit("IMMICH_URL must be set, e.g. http://immich.example.lan:2283")
     client = Immich(IMMICH_URL, _read_api_key())
     store = FrameStore(client, Source(STATE_FILE))
     Handler.store = store
@@ -647,11 +775,18 @@ def main() -> None:
 
     threading.Thread(target=recount_people, daemon=True).start()
 
-    try:
-        store.rotate()
-    except Exception as exc:  # noqa: BLE001 - start even if Immich is briefly down
-        LOG.error("initial render failed, serving once Immich answers: %s", exc)
-        store.last_error = str(exc)
+    # Only render at start-up if there is nothing to show. A restart is not a
+    # reason to consume a photo: it would advance the generation, leave the
+    # panel a step behind for no reason, and on a weekly cycle mean the frame
+    # rotates every time the container is rebuilt rather than every week.
+    if store.current:
+        LOG.info("start-up: keeping the restored frame, not rendering a new one")
+    else:
+        try:
+            store.rotate()
+        except Exception as exc:  # noqa: BLE001 - start even if Immich is briefly down
+            LOG.error("initial render failed, serving once Immich answers: %s", exc)
+            store.last_error = str(exc)
 
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     LOG.info("listening on %s:%d, immich at %s", LISTEN_HOST, LISTEN_PORT, IMMICH_URL)

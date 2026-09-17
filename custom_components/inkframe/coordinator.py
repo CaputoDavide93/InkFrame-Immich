@@ -112,10 +112,11 @@ class InkFrameCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._get("/next", timeout=NEXT_TIMEOUT_SECONDS)
         await self.async_request_refresh()
 
-    async def async_preview(self) -> bytes:
+    async def async_preview(self, generation: int | None = None) -> bytes:
         # /preview.png, never /frame.png: only the panel's own fetch may count
         # as the photo having reached the glass.
-        data = await self._get("/preview.png")
+        data = await self._get("/preview.png",
+                               params={"gen": generation} if generation else None)
         if not isinstance(data, (bytes, bytearray)):
             raise UpdateFailed("/preview.png did not return an image")
         return bytes(data)

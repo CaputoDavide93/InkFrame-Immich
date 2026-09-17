@@ -69,3 +69,238 @@ def test_score_is_independent_of_input_resolution():
     small = detail_score(base.resize((1000, 600)))
     large = detail_score(base.resize((2000, 1200)))
     assert abs(small - large) / max(small, large) < 0.5
+
+
+# --- cropping a portrait onto a landscape panel ---------------------------
+
+from immich import crop_box  # noqa: E402
+
+
+def _face(x1, y1, x2, y2, w=1440, h=1920):
+    return [{"boundingBoxX1": x1, "boundingBoxY1": y1,
+             "boundingBoxX2": x2, "boundingBoxY2": y2,
+             "imageWidth": w, "imageHeight": h}]
+
+
+def test_the_crop_window_always_matches_the_panel():
+    """Anything else is stretched or letterboxed on the glass."""
+    for w, h in [(1440, 1920), (4032, 3024), (800, 480), (3000, 500), (500, 3000)]:
+        left, top, right, bottom = crop_box(w, h)
+        assert (right - left) / (bottom - top) == pytest.approx(PANEL_W / PANEL_H, abs=0.01)
+        assert 0 <= left and 0 <= top and right <= w and bottom <= h
+
+
+def test_a_full_body_portrait_puts_the_face_a_third_down():
+    """The composition rule for a subject with a body worth showing."""
+    left, top, right, bottom = crop_box(1440, 1920, _face(600, 300, 840, 560))
+    centre = (300 + 560) / 2
+    assert (centre - top) / (bottom - top) == pytest.approx(1 / 3, abs=0.03)
+
+
+def test_a_close_up_is_centred_instead():
+    """Thirding a face that fills the frame pushes the chin out of it. Found on
+    a real photo, which is why the placement is a ramp and not a constant."""
+    left, top, right, bottom = crop_box(1440, 1920, _face(200, 200, 1240, 1300))
+    centre = (200 + 1300) / 2
+    assert (centre - top) / (bottom - top) == pytest.approx(0.5, abs=0.03)
+
+
+def test_a_face_near_an_edge_never_pushes_the_window_off_the_image():
+    """A crop starting at a negative offset renders as a black band."""
+    for box in (_face(600, 20, 840, 260), _face(600, 1700, 840, 1900),
+                _face(20, 800, 260, 1040), _face(1200, 800, 1430, 1040)):
+        left, top, right, bottom = crop_box(1440, 1920, box)
+        assert left >= 0 and top >= 0 and right <= 1440 and bottom <= 1920
+
+
+def test_every_face_is_kept_when_they_fit():
+    """A group photo cropped between two people is worse than either alone."""
+    faces = _face(200, 400, 500, 700) + _face(900, 450, 1200, 750)
+    left, top, right, bottom = crop_box(1440, 1920, faces)
+    for f in faces:
+        assert left <= f["boundingBoxX1"] and f["boundingBoxX2"] <= right
+        assert top <= f["boundingBoxY1"] and f["boundingBoxY2"] <= bottom
+
+
+def test_face_boxes_are_scaled_from_the_original_to_the_rendition():
+    """Immich reports boxes against the ORIGINAL; the renderer works on a
+    preview. Ignoring imageWidth/imageHeight crops the wrong part of the photo."""
+    original = _face(1500, 1000, 2100, 1700, w=3072, h=4080)
+    scaled = _face(1500 * 1440 / 3072, 1000 * 1920 / 4080,
+                   2100 * 1440 / 3072, 1700 * 1920 / 4080, w=1440, h=1920)
+    assert crop_box(1440, 1920, original) == pytest.approx(crop_box(1440, 1920, scaled), abs=2)
+
+
+def test_no_faces_still_produces_a_sane_window():
+    left, top, right, bottom = crop_box(1440, 1920)
+    assert (right - left, bottom - top) == (1440, int(round(1440 / (PANEL_W / PANEL_H))))
+    assert top > 0            # biased above centre, not flush to the top
+
+
+# --- the two previews -----------------------------------------------------
+
+def test_the_panels_generation_is_never_evicted():
+    """Press Next photo several times before a wake and the panel is several
+    generations behind. Evicting by age alone would discard the only copy of
+    the picture actually hanging on the wall, and the On the panel card would
+    go blank."""
+    import app  # importable because config is validated in main(), not at import
+
+    store = app.FrameStore.__new__(app.FrameStore)
+    store.lock = __import__("threading").Lock()
+    store.generations = {}
+    store.encoded = {}
+    store.meta = {}
+    store.current = 0
+    store.fetched_generation = 1
+
+    for generation in range(1, 6):
+        store.generations[generation] = b"x"
+        store.meta[generation] = {"n": generation}
+        store.encoded[(generation, "png")] = b"x"
+        keep = {generation, generation - 1, store.fetched_generation}
+        for stale in [g for g in store.generations if g not in keep]:
+            store.generations.pop(stale, None)
+            store.meta.pop(stale, None)
+        for key in [k for k in store.encoded if k[0] not in keep]:
+            store.encoded.pop(key, None)
+        store.current = generation
+
+    assert 1 in store.generations, "the panel's own photo was thrown away"
+    assert {4, 5} <= set(store.generations)
+    assert 2 not in store.generations and 3 not in store.generations
+
+
+def test_a_saved_frame_survives_a_restart(tmp_path):
+    """Before this, a restart left generation 0 and every image route
+    answering 500. With a source that has run dry -- an album with nothing in
+    it yet -- nothing would ever render, so the panel's next wake got nothing
+    and the dashboard cards stayed blank."""
+    import app
+
+    store = app.FrameStore.__new__(app.FrameStore)
+    store.source = type("S", (), {"path": str(tmp_path / "state.json")})()
+    store.lock = __import__("threading").Lock()
+    store.generations, store.meta, store.encoded = {}, {}, {}
+    store.current = 0
+
+    payload = bytes(FRAME_BYTES)
+    store._persist(payload, {"name": "kept.jpg"})
+
+    revived = app.FrameStore.__new__(app.FrameStore)
+    revived.source = store.source
+    revived.generations, revived.meta = {}, {}
+    revived.current = 0
+    revived._restore()
+
+    assert revived.current == 1
+    assert revived.generations[1] == payload
+    assert revived.meta[1]["name"] == "kept.jpg"
+
+
+def test_a_truncated_saved_frame_is_refused(tmp_path):
+    """Half a frame restores as a band of noise across the panel."""
+    import app
+
+    store = app.FrameStore.__new__(app.FrameStore)
+    store.source = type("S", (), {"path": str(tmp_path / "state.json")})()
+    (tmp_path / "frame.bin").write_bytes(b"\x00" * 100)
+    store.generations, store.meta = {}, {}
+    store.current = 0
+    store._restore()
+    assert store.current == 0 and not store.generations
+
+
+def test_restore_runs_after_the_attributes_it_touches_are_set():
+    """Twice now, inserting a method into FrameStore.__init__ put a call above
+    the attributes it reads, and the whole server answered 500 on every route.
+    A unit test cannot see ordering inside __init__, so read it."""
+    import ast, inspect
+    import app
+
+    init = next(
+        n for n in ast.parse(inspect.getsource(app.FrameStore)).body[0].body
+        if isinstance(n, ast.FunctionDef) and n.name == "__init__"
+    )
+    assigned, restored = set(), False
+    for node in init.body:
+        if any(isinstance(sub, ast.Call) and getattr(sub.func, "attr", "") == "_restore"
+               for sub in ast.walk(node)):
+            restored = True
+        if not restored:
+            targets = list(getattr(node, "targets", []))
+            if getattr(node, "target", None) is not None:
+                targets.append(node.target)
+            assigned |= {t.attr for t in targets if isinstance(t, ast.Attribute)}
+    assert restored, "__init__ no longer restores the saved frame"
+    for name in ("current", "generations", "meta", "source"):
+        assert name in assigned, f"_restore() runs before self.{name} exists"
+
+
+def test_asking_for_a_generation_that_is_gone_is_an_error_not_another_photo():
+    """It used to fall back to the newest frame, so /preview.png?gen=999
+    answered 200 with a different picture. A card captioned 'On the panel'
+    would then show something that is not on the panel."""
+    import threading
+    import app
+
+    store = app.FrameStore.__new__(app.FrameStore)
+    store.lock = threading.Lock()
+    store.generations = {7: b"seven"}
+    store.current = 7
+
+    assert store.get(None) == (7, b"seven")
+    assert store.get(7) == (7, b"seven")
+    with pytest.raises(KeyError):
+        store.get(999)
+    with pytest.raises(KeyError):
+        store.get(6)
+
+
+def test_the_panel_having_collected_a_frame_survives_a_restart(tmp_path):
+    """Otherwise the renderer restarts, 'On the panel' reads unknown and 'Up
+    next' claims a photo is waiting, while the wall has not changed at all."""
+    import threading
+    import app
+
+    store = app.FrameStore.__new__(app.FrameStore)
+    store.source = type("S", (), {"path": str(tmp_path / "state.json")})()
+    store.lock = threading.Lock()
+    store.generations = {4: bytes(FRAME_BYTES)}
+    store.meta = {4: {"name": "onwall.jpg"}}
+    store.encoded = {}
+    store.current = 4
+    store.fetched_generation = 0
+    store.fetched_at = None
+
+    store.note_panel_fetch(4)
+
+    revived = app.FrameStore.__new__(app.FrameStore)
+    revived.source = store.source
+    revived.generations, revived.meta = {}, {}
+    revived.current = 0
+    revived.fetched_generation = 0
+    revived.fetched_at = None
+    revived._restore()
+
+    assert revived.current == 1
+    assert revived.fetched_generation == 1, "the panel's photo came back as not collected"
+    assert revived.fetched_at is not None
+    assert revived.meta[1]["name"] == "onwall.jpg"
+    assert "_was_on_panel" not in revived.meta[1], "internal bookkeeping leaked into /status"
+
+
+def test_restarting_does_not_consume_a_photo():
+    """A rebuild used to advance the generation, so the panel was instantly a
+    step behind and, on a weekly cycle, the frame rotated per deploy rather
+    than per week."""
+    import ast, inspect
+    import app
+
+    main = ast.parse(inspect.getsource(app.main))
+    guarded = False
+    for node in ast.walk(main):
+        if isinstance(node, ast.If) and "current" in ast.unparse(node.test):
+            if "rotate" in ast.unparse(node):
+                guarded = True
+    assert guarded, "main() rotates at start-up without first checking for a restored frame"

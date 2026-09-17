@@ -17,7 +17,27 @@ docker compose logs -f
 
 ## State
 
-`/data/state.json` holds the source selection and every runtime setting. It exists so a container restart, or a redeploy with different environment variables, never silently reverts a choice made from Home Assistant. Back it up if you care about the settings; delete it to return to the environment defaults.
+`/data/state.json` holds the source selection and every runtime setting, and
+`/data/frame.bin` holds the last rendered frame with a small `.json` beside it.
+
+The frame is saved for a reason worth knowing: before it was, a restart left
+the renderer with nothing to serve, every image route answered 500, and with a
+source that had run dry it stayed that way indefinitely. It is written to a
+temporary name and renamed into place, so a crash mid-write cannot leave half a
+frame that restores as a band of noise, and a frame of the wrong length is
+refused outright.
+
+The save also records whether the panel had collected that frame. Without it a
+restart made Home Assistant forget what was on the wall: `On the panel` read
+unknown and `Up next` claimed something was waiting, while the wall had not
+changed.
+
+**A restart does not consume a photo.** If a frame was restored, start-up keeps
+it rather than rendering a new one. Otherwise a weekly frame would rotate every
+time the container was rebuilt, and the panel would be a generation behind from
+the moment it came back.
+
+ It exists so a container restart, or a redeploy with different environment variables, never silently reverts a choice made from Home Assistant. Back it up if you care about the settings; delete it to return to the environment defaults.
 
 ## The API key
 
@@ -28,6 +48,8 @@ Create a key in Immich with the minimum scope: `asset.read`, `asset.view`, `asse
 | Line | Meaning |
 |---|---|
 | `gen N: <file> busyness X (best of 20)` | A render happened and what it chose |
+| `restored the last frame: X (on the panel: true/false)` | A restart kept the previous picture |
+| `start-up: keeping the restored frame` | A restart deliberately did not rotate |
 | `every candidate was busier than ...` | Threshold too tight for this source |
 | `wake: gen N not yet collected, serving it` | The panel woke before collecting the previous render; no rotation |
 | `settings changed by push` / `source set by push` | Home Assistant wrote something |

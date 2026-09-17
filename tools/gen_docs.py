@@ -60,6 +60,7 @@ ENV_NOTES = {
     "CANDIDATES": "Default for `candidates` (not exposed in Home Assistant)",
     "MAX_BUSYNESS": "Default for `max_busyness`",
     "REQUIRE_CAMERA": "Default for `require_camera`; `0` to allow non-camera images",
+    "LANDSCAPE_ONLY": "Default for `landscape_only`; `0` to crop portraits instead of skipping them",
     "SLEEP_HOURS": "Default for `sleep_hours`",
     "OTA_WINDOW_SECONDS": "Default for `ota_window_seconds`",
     "HEARTBEAT_FILE": "Touched every 30 s; for external liveness checks",
@@ -75,11 +76,12 @@ SETTING_NOTES = {
     "candidates": "Photos downloaded and scored per pick. Not exposed in Home Assistant",
     "max_busyness": "Reject anything scoring above this",
     "require_camera": "Only assets with a camera make in EXIF",
+    "landscape_only": "Skip portraits. Off means they are cropped to fit, with the window placed on the faces Immich found",
     "sleep_hours": "Delivered to the panel on `/wake`",
     "ota_window_seconds": "Delivered to the panel on `/wake`",
 }
 HA_EXPOSED = {"smooth", "curve", "edge", "max_busyness", "require_camera",
-              "sleep_hours", "ota_window_seconds"}
+              "landscape_only", "sleep_hours", "ota_window_seconds"}
 
 
 def env_table(source: str) -> str:

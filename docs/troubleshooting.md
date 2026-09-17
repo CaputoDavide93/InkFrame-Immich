@@ -26,13 +26,34 @@ Check `On panel` in Home Assistant, or `on_panel` in `/status`.
 
 E-paper keeps its image with no power, so the glass alone tells you nothing.
 
-## `/wake` and `/next` fail with "no landscape photographs"
+## An album with photos in it reports as empty
 
-The chosen source has nothing eligible. For a person, check the count in the Source select's attributes; for an album, check it contains landscape photographs taken with a camera. Switch to Random to confirm the renderer itself is healthy.
+Fixed on 2026-09-17, recorded because the shape recurs. `/api/albums/{id}`
+returns the album's metadata and `assetCount` but **no `assets` key**, so
+reading assets from it yields an empty list. The renderer reported "no
+landscape photographs" about an album holding sixteen, which sent the blame to
+the library rather than the code. Album assets come from
+`/api/search/metadata` with `albumIds` now, and a test pins that choice.
+
+If you see it again: compare `assetCount` from `/api/albums` against what
+`/albums` and `/status` say the renderer found.
+
+## `/wake` and `/next` fail with "nothing matched"
+
+The chosen source has nothing eligible. For a person, check the count in the Source select's attributes; for an album, check it contains landscape photographs taken with a camera. Switch to Random to confirm the renderer itself is healthy. The message says
+whether the source was empty or a filter rejected everything, and names
+`landscape_only` when that is the filter in question.
 
 ## `online_image` logs an allocation failure
 
 The 48 KB decode buffer could not be allocated. Watch **Heap largest block** on the panel: if it sits near 20 KB before the first fetch, something else grabbed memory first. Do not add components to the firmware; the budget is what it is. Power-cycle the panel to defragment.
+
+## Portraits are still being skipped
+
+`landscape_only` is on. Turn **Portraits** off in Home Assistant, or set
+`LANDSCAPE_ONLY=0`. If portraits appear but are cropped oddly, check that the
+API key carries `face.read`: without it Immich returns no boxes, the crop falls
+back to centred, and a standing subject is cropped at the chest.
 
 ## The picture is a negative
 
