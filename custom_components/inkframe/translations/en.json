@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "InkFrame for Immich",
+        "description": "The renderer that prepares photos for the ePaper panel (services/ImmichFrame). Settings take effect at the panel's next weekly wake.",
+        "data": {
+          "url": "Renderer URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach an InkFrame renderer at that URL. Check the address and that the container is running."
+    },
+    "abort": {
+      "already_configured": "This renderer is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "InkFrame for Immich",
+        "data": {
+          "scan_seconds": "Poll interval (seconds)"
+        }
+      }
+    }
+  }
+}

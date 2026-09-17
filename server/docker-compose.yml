@@ -1,0 +1,37 @@
+# The renderer. Copy .env.example to .env first; IMMICH_URL is required.
+services:
+  immich-frame:
+    build: .
+    image: ha-immich-frame:latest
+    container_name: HA_ImmichFrame
+    restart: always
+    ports:
+      # Bind to one interface instead if the host has networks the panel should
+      # not be reachable from: "${LISTEN_BIND:-0.0.0.0}:8099:8099" with LISTEN_BIND in .env.
+      - "${LISTEN_BIND:-0.0.0.0}:8099:8099"
+    environment:
+      # Required. Set it in .env (copy .env.example).
+      IMMICH_URL: ${IMMICH_URL:?set IMMICH_URL in .env}
+      IMMICH_API_KEY_FILE: /run/secrets/immich_frame_api_key
+      RENDER_SMOOTH: ${RENDER_SMOOTH:-0.45}
+      RENDER_CURVE: ${RENDER_CURVE:-0.35}
+      RENDER_EDGE: ${RENDER_EDGE:-55}
+      RENDER_CONTRAST: ${RENDER_CONTRAST:-1.05}
+      CANDIDATES: ${CANDIDATES:-20}
+      MAX_BUSYNESS: ${MAX_BUSYNESS:-22}
+      TZ: Europe/London
+    volumes:
+      # The household's source choice must survive a restart: the panel sleeps
+      # a week between wakes, and silently reverting to Random would look
+      # exactly like the push from Home Assistant never worked.
+      - immich-frame-state:/data
+    secrets:
+      - immich_frame_api_key
+
+volumes:
+  immich-frame-state:
+
+secrets:
+  immich_frame_api_key:
+    # 0644: uid 1000 inside the container cannot read 0600.
+    file: ${HOME}/Secrets/immich_frame_api_key

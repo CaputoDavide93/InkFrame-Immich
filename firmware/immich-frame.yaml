@@ -1,0 +1,280 @@
+# Seeed Studio XIAO 7.5" ePaper Panel -- Immich photo frame.
+#
+# Board: XIAO ESP32-C3 on the 7.5" carrier, 800x480 black/white (UC8179).
+# Pinout from wiki.seeedstudio.com/xiao_075inch_epaper_panel_esphome/.
+#
+# WHY THE PHOTO COMES IN FINISHED
+# -------------------------------
+# This chip has no PSRAM and about 200 KB of usable heap, of which the display
+# itself takes 48 KB. It cannot fetch a photo, decode it, scale it and dither
+# it. So services/ImmichFrame does all of that and serves a 1-bit image that is
+# already exactly 800x480: the panel only decodes and draws. Free heap once the
+# second buffer is allocated is ~43 KB, which works but leaves no room -- the
+# "Heap free" and "Heap largest block" sensors exist so that a regression shows
+# up as a number in Home Assistant rather than as a panel that mysteriously
+# stopped changing.
+#
+# Build and flash with:
+#   esphome run immich-frame.yaml                  # first time, over USB
+#   esphome run immich-frame.yaml --device <ip>    # later, over the air, while awake
+
+substitutions:
+  device_name: immich-frame
+  friendly_name: Immich Frame
+  # The renderer's URL, from secrets.yaml so this file carries no addresses.
+  # The panel's network must be able to reach it over plain HTTP.
+  frame_server: !secret frame_server_url
+  # FALLBACK only. The real sleep interval and OTA window arrive from the
+  # server on every /wake, so both are Home Assistant settings and changing
+  # them needs no reflash. These values are used when /wake cannot be reached,
+  # in which case the panel keeps last week's photo and tries again after this.
+  sleep_for: 168h
+  sleep_fallback_s: "604800"
+  # Backstop only. The normal path sleeps as soon as the photo is on the glass
+  # and the OTA window below has passed, which is about 30s. This value exists
+  # for the failure path -- a fetch that errors, retries and errors again --
+  # so that a node which never finishes its work still sleeps instead of
+  # sitting awake flattening the battery.
+  awake_for: 120s
+  # Fallback OTA window, see above. Normally the server's value is used.
+  ota_window: 20s
+  ota_window_fallback_s: "20"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  # No on_boot fetch: a fixed delay long enough to be safe is mostly dead
+  # waiting, and the only thing the fetch needs is an IP. wifi.on_connect
+  # fires the moment there is one, which removed about 12s from every wake.
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+globals:
+  - id: fetched_this_wake
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  # Delivered by /wake. Zero means "not received, use the substitution".
+  - id: sleep_seconds
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: ota_window_seconds
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
+logger:
+  level: DEBUG
+
+debug:
+  update_interval: 60s
+
+api:
+  encryption:
+    key: !secret immich_frame_api_key
+
+ota:
+  - platform: esphome
+    password: !secret immich_frame_ota_password
+
+wifi:
+  on_connect:
+    # WiFi can reconnect mid-wake; without the guard a flap would start a
+    # second fetch on top of the first.
+    - if:
+        condition:
+          lambda: 'return !id(fetched_this_wake);'
+        then:
+          - lambda: 'id(fetched_this_wake) = true;'
+          - script.execute: wake_script
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Immich-Frame Fallback"
+    password: !secret fallback_password
+
+captive_portal:
+
+deep_sleep:
+  id: sleeper
+  # No wakeup trigger is configured, so this is the whole cycle: wake, draw,
+  # sleep. `run_duration` is a backstop rather than a target -- the node sleeps
+  # when it expires whatever else is happening, which is what stops a failed
+  # fetch from sitting awake and flattening the battery.
+  run_duration: ${awake_for}
+  sleep_duration: ${sleep_for}
+
+http_request:
+  useragent: esphome/immich-frame
+  timeout: 15s
+  verify_ssl: false
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_big
+    size: 40
+
+online_image:
+  - id: photo
+    url: "${frame_server}/frame.bmp"
+    format: BMP
+    type: BINARY
+    resize: 800x480
+    # Small receive buffer on purpose: the decoded 48 KB buffer is the tight
+    # allocation, so the download side is kept cheap.
+    buffer_size: 4096
+    update_interval: never
+    on_download_finished:
+      - logger.log: "online_image: download OK"
+      - component.update: epaper
+      # The photo is on the glass; everything after this is the OTA window.
+      #
+      # This condition is load-bearing and was learned the hard way:
+      # `deep_sleep.prevent` does NOT block an explicit `deep_sleep.enter`. It
+      # only suppresses the automatic `run_duration` expiry. Without the guard
+      # below, turning Stay awake on and then letting a photo finish put the
+      # node straight into a seven-day sleep with nothing but the reset button
+      # able to recover it.
+      - delay: !lambda |-
+          return (id(ota_window_seconds) > 0 ? id(ota_window_seconds) : ${ota_window_fallback_s}) * 1000;
+      - if:
+          condition:
+            switch.is_off: stay_awake
+          then:
+            - deep_sleep.enter:
+                id: sleeper
+                sleep_duration: !lambda |-
+                  return (id(sleep_seconds) > 0 ? id(sleep_seconds) : ${sleep_fallback_s}) * 1000;
+          else:
+            - logger.log: "Stay awake is on - not sleeping"
+    on_error:
+      # A failed fetch leaves the previous photo on the glass, which is the
+      # right failure: e-paper holds its last image with no power, so a stale
+      # photo is invisible as a fault. The log line is the only evidence.
+      - logger.log:
+          format: "online_image: DOWNLOAD FAILED, retrying once"
+          level: ERROR
+      # One retry inside the wake window. Without it a single failed fetch
+      # costs a whole week: the panel keeps last week's photo, which looks
+      # exactly like success, and nothing tries again until the next wake.
+      - delay: 10s
+      - component.update: photo
+
+spi:
+  clk_pin: GPIO8
+  mosi_pin: GPIO10
+
+display:
+  - platform: waveshare_epaper
+    id: epaper
+    model: 7.50inv2
+    cs_pin: GPIO3
+    dc_pin: GPIO5
+    reset_pin: GPIO2
+    busy_pin:
+      # Seeed are explicit that this inversion is required and that omitting
+      # it can damage the panel. Do not "tidy" it away.
+      number: GPIO4
+      inverted: true
+    rotation: 0
+    update_interval: never
+    lambda: |-
+      if (id(photo).get_width() > 0) {
+        it.image(0, 0, id(photo));
+      } else {
+        it.print(20, 200, id(font_big), "no photo yet");
+      }
+
+script:
+  - id: wake_script
+    then:
+      # /wake, never /next: the server rotates only if the panel has already
+      # collected the current frame, so a photo Home Assistant rendered and
+      # nobody has seen yet is delivered before a new one is made. The reply
+      # also carries the sleep interval and OTA window.
+      - http_request.get:
+          url: "${frame_server}/wake"
+          capture_response: true
+          max_response_buffer_size: 512
+          on_response:
+            then:
+              - lambda: |-
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    if (root["sleep_seconds"].is<uint32_t>())
+                      id(sleep_seconds) = root["sleep_seconds"].as<uint32_t>();
+                    if (root["ota_window_seconds"].is<uint32_t>())
+                      id(ota_window_seconds) = root["ota_window_seconds"].as<uint32_t>();
+                    return true;
+                  });
+                  ESP_LOGI("wake", "server says: sleep %us, ota window %us",
+                           id(sleep_seconds), id(ota_window_seconds));
+          on_error:
+            - logger.log:
+                format: "/wake unreachable; using fallback sleep and fetching current frame"
+                level: WARN
+      - component.update: photo
+
+  # Home Assistant's "Next photo" is a server-side action; this button on the
+  # panel itself only refetches whatever the server currently has.
+  - id: next_photo_script
+    then:
+      - component.update: photo
+
+sensor:
+  - platform: debug
+    free:
+      name: "Heap free"
+    block:
+      name: "Heap largest block"
+  - platform: wifi_signal
+    id: rssi
+    name: "WiFi signal"
+    update_interval: 60s
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      id: ip_addr
+      name: "IP address"
+      entity_category: diagnostic
+    ssid:
+      name: "SSID"
+      entity_category: diagnostic
+
+button:
+  - platform: template
+    name: "Next photo"
+    id: next_photo
+    on_press:
+      - script.execute: next_photo_script
+  - platform: restart
+    name: "Restart"
+    entity_category: config
+
+switch:
+  - platform: template
+    name: "Stay awake"
+    id: stay_awake
+    # Survives deep sleep because it is stored in flash. Turn it on during the
+    # weekly wake window and the node stops sleeping, which is the only way to
+    # get more than 90 seconds of access a week for tuning or an OTA. Turning
+    # it off again lets the next cycle sleep normally.
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    entity_category: config
+    turn_on_action:
+      - deep_sleep.prevent: sleeper
+    turn_off_action:
+      - deep_sleep.allow: sleeper
+
+# No rotation interval: one wake is one photo. An interval here would fight
+# the sleep cycle and only ever fire if the node were being held awake.

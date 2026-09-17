@@ -1,0 +1,15 @@
+{
+  "domain": "inkframe",
+  "name": "InkFrame for Immich",
+  "version": "0.1.0",
+  "documentation": "https://github.com/CaputoDavide93/InkFrame-Immich",
+  "codeowners": [
+    "@CaputoDavide93"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "iot_class": "local_polling",
+  "requirements": [],
+  "integration_type": "device",
+  "issue_tracker": "https://github.com/CaputoDavide93/InkFrame-Immich/issues"
+}
