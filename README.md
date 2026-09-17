@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="https://raw.githubusercontent.com/CaputoDavide93/InkFrame-Immich/main/brand/icon.png" alt="InkFrame" width="104" height="104">
+
 # 🖼️ InkFrame for Immich
 
 **A battery-powered 7.5" e-paper photo frame that shows one good photo a week from your own Immich library, managed from Home Assistant.**
@@ -10,6 +12,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
+[![Release](https://img.shields.io/github/v/release/CaputoDavide93/InkFrame-Immich)](https://github.com/CaputoDavide93/InkFrame-Immich/releases)
 [![CI](https://github.com/CaputoDavide93/InkFrame-Immich/actions/workflows/ci.yml/badge.svg)](https://github.com/CaputoDavide93/InkFrame-Immich/actions/workflows/ci.yml)
 
 </div>
@@ -19,6 +22,11 @@
 The panel is a Seeed Studio XIAO 7.5" ePaper Panel: an ESP32-C3 with no PSRAM and about 200 KB of heap, driving an 800x480 black-and-white display from a 2000 mAh cell. It cannot fetch, decode, scale or dither a photograph. So a small server does all of that and hands the panel a finished one-bit frame it only has to copy onto the glass. The panel wakes once a week, draws, and sleeps.
 
 Three things decide whether a photo looks good on a one-bit panel, and none of them is the dithering algorithm. This project selects for all three before it renders anything. See [Rendering](docs/rendering.md).
+
+<div align="center">
+<img src="docs/assets/demo.png" alt="A drawn scene on the left; on the right the same scene after the renderer: 800x480, one bit, dithered" width="100%">
+<br><sub>A synthetic scene through the real pipeline. The frames this was built on are family photographs, which stay at home.</sub>
+</div>
 
 ---
 
@@ -161,15 +169,21 @@ InkFrame-Immich/
 │   └── secrets.yaml.example
 ├── custom_components/
 │   └── inkframe/               # 🏠 Home Assistant integration
-├── .github/workflows/ci.yml   # ✅ tests, generated docs, hassfest, HACS, ESPHome
-├── hacs.json                   # 🏠 HACS metadata
+├── .github/
+│   ├── workflows/ci.yml        # ✅ tests, generated docs, hassfest, HACS, ESPHome
+│   ├── ISSUE_TEMPLATE/         # 🐛 bug report, feature request
+│   └── dependabot.yml
+├── brand/                      # 🎨 icon and logo, drawn by tools/gen_brand.py
+├── docs/                       # 📚 deep-dives, runbooks, the demo image
 ├── tools/
 │   ├── gen_docs.py             # 🤖 regenerates the inventory tables
+│   ├── gen_brand.py            #    regenerates brand/ and the demo
 │   └── export-public.sh        #    assembles this tree from the source monorepo
-├── docs/                       # 📚 deep-dives and runbooks
-├── LICENSE
+├── hacs.json                   # 🏠 HACS metadata
+├── CHANGELOG.md
+├── CONTRIBUTING.md
 ├── SECURITY.md
-└── CONTRIBUTING.md
+└── LICENSE
 ```
 
 ---
@@ -207,6 +221,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and pull requests are welcome, in
 
 ## 📄 License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 <p align="center"><sub>Made with ❤️ by <a href="https://github.com/CaputoDavide93">Davide Caputo</a></sub></p>

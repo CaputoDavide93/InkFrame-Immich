@@ -36,6 +36,10 @@ Two rules from experience, both explained in the file: keep `busy_pin` inverted,
 
 The integration imports and instantiates cleanly under the Home Assistant version on PyPI; a real Home Assistant is the only full test. Keep entity names in Title Case, keep the `/preview.png` rule (the integration never fetches `/frame.*`), and keep the docstrings honest about what an entity can and cannot know.
 
+## Brand and demo images
+
+`tools/gen_brand.py` draws `brand/` and `docs/assets/demo.png` from code. Edit the script, run it, commit the result; never edit the PNGs by hand.
+
 ## Style
 
 - Comments explain why, not what. The code already says what.
