@@ -43,15 +43,23 @@ Three things decide whether a photo looks good on a one-bit panel, and none of t
 ## 🗺️ Architecture
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "basis", "padding": 12}, "themeVariables": {"edgeLabelBackground": "transparent"}}}%%
 flowchart LR
-    IM["📚 Immich"]
-    RS["🧠 Renderer<br/>Docker, :8099"]
-    HA["🏠 Home Assistant<br/>inkframe"]
-    PN["📟 XIAO 7.5&quot; panel<br/>ESP32-C3, battery"]
+    IM["📚 Immich<br/>your photo library"]
+    RS["🧠 Renderer<br/>picks and prepares one photo"]
+    PN["📟 ePaper frame<br/>awake about 35s a week"]
+    HA["🏠 Home Assistant<br/>settings · previews · next photo"]
 
-    RS -- "/api/search, /api/people,<br/>thumbnails" --> IM
-    HA -- "/status every 5 min<br/>/source /settings /next" --> RS
-    PN -- "/wake then /frame.bmp<br/>once a week" --> RS
+    IM -->|"20 candidates,<br/>scored"| RS
+    RS -->|"one 800x480<br/>one-bit frame"| PN
+    HA <-->|"control and status"| RS
+
+    classDef plain fill:#161b22,stroke:#30363d,color:#e6edf3
+    classDef hub fill:#6f42c1,stroke:#8957e5,color:#ffffff
+    classDef device fill:#9a6700,stroke:#bb8009,color:#ffffff
+    class IM,HA plain
+    class RS hub
+    class PN device
 ```
 
 The panel never talks to Home Assistant and Home Assistant never talks to the panel. Both talk to the renderer, which is awake all the time. A setting you change in Home Assistant is stored on the renderer and takes effect at the panel's next wake. The one entity that tells you whether a photo actually reached the glass is `On panel`; see [why that matters](docs/home-assistant.md#rendered-is-not-displayed).
@@ -116,7 +124,7 @@ esphome run firmware/immich-frame.yaml
 
 Without HACS: copy `custom_components/inkframe` into `<config>/custom_components/` and restart.
 
-Full walkthroughs: [Hardware](docs/hardware.md) · [Firmware](docs/firmware.md) · [Home Assistant](docs/home-assistant.md) · [Operations](docs/operations.md).
+Full walkthroughs: [Hardware](docs/hardware.md) · [Firmware](docs/firmware.md) · [Home Assistant](docs/home-assistant.md) · [Operations](docs/operations.md) · [Releasing](docs/releasing.md).
 
 ---
 

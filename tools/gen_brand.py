@@ -43,24 +43,78 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
 
 
 def scene(w: int, h: int) -> Image.Image:
-    """Sky gradient, sun, hills, a lone tree: gradients and edges, the two
-    things a one-bit panel has to be made to cope with."""
-    img = Image.new("RGB", (w, h))
-    px = img.load()
-    for y in range(h):
-        t = y / h
-        r = int(40 + 180 * t); g = int(60 + 150 * t); b = int(110 + 120 * t)
-        for x in range(w):
-            px[x, y] = (r, g, b)
-    d = ImageDraw.Draw(img)
-    d.ellipse([w * 0.62, h * 0.18, w * 0.62 + h * 0.28, h * 0.46], fill=(255, 236, 200))
-    for i, (yy, shade) in enumerate([(0.62, 70), (0.70, 95), (0.80, 125)]):
-        pts = [(x, h * yy + math.sin(x / w * math.pi * (2 + i)) * h * 0.05) for x in range(0, w + 40, 40)]
-        d.polygon([(0, h)] + pts + [(w, h)], fill=(shade, shade + 20, shade - 10))
-    tx, ty = w * 0.22, h * 0.66
-    d.rectangle([tx - w * 0.006, ty, tx + w * 0.006, ty + h * 0.22], fill=(50, 40, 30))
-    d.ellipse([tx - w * 0.07, ty - h * 0.20, tx + w * 0.07, ty + h * 0.04], fill=(40, 60, 40))
-    return img.filter(ImageFilter.GaussianBlur(0.6))
+    """A scene chosen to be hard, not pretty.
+
+    A one-bit panel fails in three distinct ways, so the demo has to contain
+    all three or it flatters the pipeline: a wide smooth gradient (banding),
+    fine high-frequency texture (the speckle that made Davide ask for this
+    work in the first place), and hard edges against soft ones (haloing from
+    the unsharp pass). Sky, foliage and the waterline cover them in that
+    order.
+    """
+    import numpy as np
+
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    v, u = yy / h, xx / w
+
+    # Sky: a long vertical ramp, the thing that bands worst.
+    sky = np.stack([92 + 118 * v, 138 + 92 * v, 196 + 52 * v], axis=-1)
+
+    # Sun with a wide soft halo -- a smooth radial on top of a linear ramp.
+    sx, sy = w * 0.70, h * 0.24
+    rad = np.hypot(xx - sx, yy - sy)
+    halo = np.clip(1.0 - rad / (h * 0.42), 0, 1) ** 2.2
+    disc = np.clip((h * 0.085 - rad) / 2.0, 0, 1)
+    sky += halo[..., None] * np.array([52, 40, 8], np.float32)
+    sky = sky * (1 - disc[..., None]) + disc[..., None] * np.array([255, 246, 222], np.float32)
+
+    img = sky
+
+    # Water, with a horizon and a compressed reflection of the sky above it.
+    horizon = h * 0.60
+    water = img[: int(horizon)][::-1]
+    water = np.asarray(Image.fromarray(water.clip(0, 255).astype(np.uint8))
+                       .resize((w, h - int(horizon))), np.float32)
+    water = water * 0.80 + np.array([22, 34, 46], np.float32)
+    # Ripples: horizontal streaks, the edge case between smooth and textured.
+    ripple = (np.sin(yy[int(horizon):] * 0.9) * np.cos(xx[int(horizon):] * 0.05) * 7.0)
+    water += ripple[..., None]
+    img = np.concatenate([img[: int(horizon)], water], axis=0)
+
+    # Hills: flat-ish tones close together, which is where banding shows.
+    for i, (base, shade) in enumerate([(0.585, 168), (0.545, 138), (0.505, 112)]):
+        ridge = h * base - np.sin(u * math.pi * (1.4 + i * 0.9) + i) * h * 0.045
+        mask = yy > ridge
+        band = np.array([shade - 18, shade, shade - 30], np.float32)
+        img = np.where(mask[..., None] & (yy < horizon)[..., None], band, img)
+
+    # Foreground bank with real noise: the high-frequency case.
+    rng = np.random.default_rng(7)
+    bank = yy > h * 0.86 - np.sin(u * math.pi * 2.6) * h * 0.02
+    grass = np.array([118, 140, 82], np.float32) + rng.normal(0, 16, (h, w, 1)).astype(np.float32)
+    img = np.where(bank[..., None], grass, img)
+
+    out = Image.fromarray(img.clip(0, 255).astype(np.uint8))
+
+    # A tree: a hard silhouette with textured foliage inside it.
+    d = ImageDraw.Draw(out)
+    tx, ty = w * 0.20, h * 0.58
+    for _ in range(11):
+        ox, oy = rng.normal(0, w * 0.026), rng.normal(0, h * 0.042)
+        rr = rng.uniform(h * 0.07, h * 0.115)
+        g = 104 + int(rng.uniform(0, 46))
+        d.ellipse([tx + ox - rr, ty + oy - rr * 0.82, tx + ox + rr, ty + oy + rr * 0.82],
+                  fill=(g - 40, g, g - 56))
+    # The trunk goes on last: drawn first, a canopy lobe landing on it read as
+    # a brown smear rather than a tree.
+    d.rectangle([tx - w * 0.005, ty + h * 0.06, tx + w * 0.005, h * 0.89], fill=(62, 48, 34))
+    # Leaf speckle inside the canopy, so it is texture rather than a blob.
+    can = np.asarray(out, np.float32)
+    leaf = (np.hypot(xx - tx, (yy - ty) * 1.25) < h * 0.15) & (yy < h * 0.74)
+    can = np.where(leaf[..., None], can + rng.normal(0, 19, (h, w, 1)), can)
+    out = Image.fromarray(can.clip(0, 255).astype(np.uint8))
+
+    return out.filter(ImageFilter.GaussianBlur(0.4))
 
 
 def icon(size: int) -> Image.Image:
@@ -100,14 +154,45 @@ def logo(scale: int = 1) -> Image.Image:
 
 
 def demo() -> Image.Image:
+    """The before/after card for the README.
+
+    Laid out rather than pasted: the first version put two bare panels flush
+    against the image edge with the captions floating over them, which read as
+    a screenshot of something unfinished. Margins, a rule under each caption
+    and the numbers under the right-hand panel do the explaining the prose
+    would otherwise have to.
+    """
     before = scene(PANEL_W, PANEL_H)
     after = render(before).convert("RGB")
-    gap = 24
-    out = Image.new("RGB", (PANEL_W * 2 + gap, PANEL_H + 56), PAPER)
-    out.paste(before, (0, 56)); out.paste(after, (PANEL_W + gap, 56))
-    d = ImageDraw.Draw(out); f = _font(26)
-    d.text((0, 14), "what Immich has", fill=INK, font=f)
-    d.text((PANEL_W + gap, 14), "what the panel gets: 800x480, one bit, dithered", fill=INK, font=f)
+
+    pad, gap, cap_h, foot_h = 40, 34, 52, 40
+    w = pad * 2 + PANEL_W * 2 + gap
+    h = pad * 2 + cap_h + PANEL_H + foot_h
+    out = Image.new("RGB", (w, h), PAPER)
+    d = ImageDraw.Draw(out)
+
+    label = _font(25)
+    small = _font(20)
+    muted = (122, 116, 106)
+    rule = (214, 208, 197)
+
+    for i, (img, title, foot) in enumerate((
+        (before, "THE PHOTOGRAPH", "as Immich stores it"),
+        (after, "THE FRAME", f"{PANEL_W} x {PANEL_H} · 1 bit · 48 KB"),
+    )):
+        x = pad + i * (PANEL_W + gap)
+        y = pad + cap_h
+        d.text((x, pad + 4), title, fill=INK, font=label)
+        d.line([(x, pad + cap_h - 12), (x + PANEL_W, pad + cap_h - 12)], fill=rule, width=1)
+        out.paste(img, (x, y))
+        # A hairline keeps the light sky from bleeding into the page.
+        d.rectangle([x, y, x + PANEL_W - 1, y + PANEL_H - 1], outline=rule, width=1)
+        d.text((x, y + PANEL_H + 12), foot, fill=muted, font=small)
+
+    # The arrow carries the direction the two panels only imply.
+    ax, ay = pad + PANEL_W + gap // 2, pad + cap_h + PANEL_H // 2
+    d.line([(ax - 9, ay), (ax + 7, ay)], fill=ACCENT, width=3)
+    d.polygon([(ax + 12, ay), (ax + 2, ay - 6), (ax + 2, ay + 6)], fill=ACCENT)
     return out
 
 
