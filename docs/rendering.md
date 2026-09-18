@@ -9,14 +9,10 @@ glass, so for a long time portraits were simply skipped. They are not any more:
 the renderer crops an 800x480 window out of them and places it on the faces
 Immich has already detected.
 
-```mermaid
-flowchart LR
-    P["portrait 1440x1920"] --> F{"faces from<br/>/api/faces?"}
-    F -->|yes| A["window placed on them"]
-    F -->|no| B["window centred,<br/>biased above middle"]
-    A --> C["800x480"]
-    B --> C
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/portrait-crop-dark.svg">
+  <img src="assets/portrait-crop-light.svg" width="100%" alt="A portrait is cropped to 800 by 480: the window is placed on the faces Immich found, or centred and biased above the middle.">
+</picture>
 
 Where the face sits vertically depends on how much of the window it fills:
 
@@ -47,16 +43,10 @@ Set `landscape_only` (**Portraits** in Home Assistant) to keep skipping them.
 
 ## Three filters, then a score
 
-```mermaid
-flowchart LR
-    A["Immich random<br/>100 assets"] --> B{landscape<br/>by orientation?}
-    B -->|no| X1[drop]
-    B -->|yes| C{camera make<br/>in EXIF?}
-    C -->|no| X2[drop]
-    C -->|yes| D["download preview,<br/>score busyness"]
-    D --> E["sort, take the calmest<br/>of 20"]
-    E --> F[render]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/selection-pipeline-dark.svg">
+  <img src="assets/selection-pipeline-light.svg" width="100%" alt="A hundred random assets are filtered by orientation, then by whether a camera took them, then twenty are downloaded and scored and the calmest is rendered.">
+</picture>
 
 ### Landscape by orientation
 

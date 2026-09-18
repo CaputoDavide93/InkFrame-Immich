@@ -52,25 +52,10 @@ The panel never talks to Home Assistant and Home Assistant never talks to the pa
 
 The weekly wake, end to end:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant P as 📟 Panel
-    participant R as 🧠 Renderer
-    participant I as 📚 Immich
-
-    P->>R: GET /wake
-    alt current frame already collected
-        R->>I: random landscape photographs
-        R->>R: score 20 candidates, render the calmest
-    else frame rendered but never collected
-        R->>R: keep it, do not rotate
-    end
-    R-->>P: generation, sleep_seconds, ota_window_seconds
-    P->>R: GET /frame.bmp
-    R-->>P: 48 KB one-bit BMP
-    P->>P: draw, wait the OTA window, deep sleep
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wake-sequence-dark.svg">
+  <img src="docs/assets/wake-sequence-light.svg" width="100%" alt="The panel calls /wake; the renderer rotates to a new photograph or serves the one already rendered, replies with the sleep parameters, serves the frame, and the panel draws it and sleeps.">
+</picture>
 
 Deeper: [Architecture](docs/architecture.md).
 

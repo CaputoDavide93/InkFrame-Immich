@@ -4,22 +4,10 @@
 
 ## What a wake does
 
-```mermaid
-flowchart TD
-    B[Boot] --> W[Wi-Fi connects]
-    W --> G["GET /wake"]
-    G -->|reply| S["store sleep_seconds,<br/>ota_window_seconds"]
-    G -->|unreachable| F["log a warning,<br/>keep fallback values"]
-    S --> I["online_image fetches /frame.bmp"]
-    F --> I
-    I -->|ok| D[display update]
-    I -->|error| R["wait 10 s, retry once"]
-    R --> I
-    D --> O["delay: OTA window"]
-    O --> C{Stay awake on?}
-    C -->|no| Z["deep_sleep.enter<br/>sleep_duration from server"]
-    C -->|yes| A[stay awake]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/firmware-flow-dark.svg">
+  <img src="assets/firmware-flow-light.svg" width="100%" alt="Boot, connect to Wi-Fi, call /wake and store the reply or keep the fallback values, fetch the frame with one retry, draw it, hold the OTA window, then sleep unless Stay awake is on.">
+</picture>
 
 **The fetch fires on `wifi.on_connect`, not a fixed boot delay.** The only thing it needs is an IP address. A fixed delay long enough to be safe was twelve seconds of dead waiting on every wake.
 

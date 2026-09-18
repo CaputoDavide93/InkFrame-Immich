@@ -2,20 +2,10 @@
 
 Three parts, one of which is asleep almost all the time.
 
-```mermaid
-flowchart TB
-    subgraph Always on
-        IM["📚 Immich"]
-        RS["🧠 Renderer"]
-        HA["🏠 Home Assistant"]
-    end
-    subgraph Wakes once a week
-        PN["📟 Panel"]
-    end
-    RS --> IM
-    HA --> RS
-    PN --> RS
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/topology-dark.svg">
+  <img src="assets/topology-light.svg" width="100%" alt="Immich, the renderer and Home Assistant are always on; the panel wakes about thirty-five seconds a week.">
+</picture>
 
 ## Why the renderer exists
 
@@ -29,19 +19,10 @@ The panel sleeps for all but about 35 seconds a week. Home Assistant cannot push
 
 ## The wake protocol
 
-```mermaid
-stateDiagram-v2
-    [*] --> Boot
-    Boot --> WiFi: connect
-    WiFi --> Wake: GET /wake
-    Wake --> Fetch: GET /frame.bmp
-    Fetch --> Draw: decode into the image buffer
-    Draw --> Window: OTA window (server value)
-    Window --> Sleep: deep sleep (server value)
-    Sleep --> Boot: timer
-    Window --> Awake: Stay awake switch on
-    Awake --> Awake
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/wake-states-dark.svg">
+  <img src="assets/wake-states-light.svg" width="100%" alt="Boot, connect, call /wake, fetch the frame, draw it, hold an OTA window, then deep sleep until the timer fires and it boots again.">
+</picture>
 
 `/wake` does two things in one call.
 
