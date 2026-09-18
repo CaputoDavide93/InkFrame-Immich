@@ -358,7 +358,9 @@ class FrameStore:
             named = self.client.people()
             summary: dict[str, dict] = {}
             for name, pid in named.items():
-                n = len(self.client.by_person(pid))
+                n = len(self.client.by_person(
+                    pid, require_camera=bool(self.source.settings["require_camera"])
+                ))
                 summary[name] = {"landscape": n, "eligible": n >= MIN_PERSON_PHOTOS}
             albums = sorted(self.client.albums())
             with self.lock:
@@ -560,7 +562,8 @@ class FrameStore:
                                               exclude=set(self.recent),
                                               require_camera=bool(self.source.settings["require_camera"]),
                                               landscape_only=landscape_only)
-            assets = self.client.by_album(album_id, landscape_only=landscape_only)
+            assets = self.client.by_album(album_id, landscape_only=landscape_only,
+                                          require_camera=require_camera)
         elif mode == "search":
             assets = self.client.by_search(self.source.query,
                                            landscape_only=landscape_only,
@@ -725,6 +728,10 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as exc:
                     self._json(400, {"error": str(exc)})
                     return
+                if "require_camera" in changes:
+                    # Eligibility drives HA's Source options. Recount now so
+                    # turning the switch off does not leave people hidden for a day.
+                    threading.Thread(target=store.count_people, daemon=True).start()
                 LOG.info("settings changed by push: %s", changes)
             self._json(200, {"settings": store.source.settings,
                              "spec": {k: {"type": v[0].__name__, "min": v[1],

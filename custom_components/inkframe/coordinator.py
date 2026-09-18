@@ -41,7 +41,9 @@ class InkFrameCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.entry = entry
         self.url = entry.data[CONF_URL].rstrip("/")
-        self.token = entry.data[CONF_TOKEN]
+        # Entries created before renderer authentication have no token. Setup
+        # handles that as an actionable reconfigure requirement, not a KeyError.
+        self.token = entry.data.get(CONF_TOKEN, "")
         seconds = entry.options.get(CONF_SCAN_SECONDS, DEFAULT_SCAN_SECONDS)
         super().__init__(
             hass,

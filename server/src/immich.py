@@ -187,7 +187,7 @@ class Immich:
         return {a["albumName"]: a["id"] for a in rows if a.get("albumName")}
 
     def by_album(self, album_id: str, landscape_only: bool = True,
-                 max_pages: int = 8) -> list[dict]:
+                 require_camera: bool = True, max_pages: int = 8) -> list[dict]:
         """Photographs in one album.
 
         Via search, NOT `/api/albums/{id}`: that endpoint returns the album's
@@ -197,10 +197,8 @@ class Immich:
         library for a missing key is exactly the kind of error that sends
         somebody looking in the wrong place.
 
-        A curated album is a deliberate choice, so the camera filter is not
-        applied here: a scanned picture somebody added on purpose belongs on
-        the wall. Orientation still applies, unless portraits are being
-        cropped to fit.
+        The camera filter has the same meaning for every source; turn
+        `require_camera` off to deliberately include scans in this album.
         """
         out: list[dict] = []
         page: int | str | None = 1
@@ -211,6 +209,8 @@ class Immich:
             for asset in assets.get("items", []):
                 exif = asset.get("exifInfo") or {}
                 if landscape_only and is_landscape(exif) is not True:
+                    continue
+                if require_camera and not has_camera(exif):
                     continue
                 out.append(asset)
             page = assets.get("nextPage")

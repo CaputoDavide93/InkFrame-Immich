@@ -50,6 +50,7 @@ class SourceSelect(InkFrameEntity, SelectEntity):
         # Only people with enough landscape photographs. Offering the others
         # gives a source that runs dry against the recently-shown list and
         # silently repeats -- the server decides the threshold, not us.
+        data = self.coordinator.data or {}
         people = sorted(
             name for name, info in self.coordinator.people.items()
             if isinstance(info, dict) and info.get("eligible")

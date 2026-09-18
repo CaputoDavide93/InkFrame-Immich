@@ -50,7 +50,7 @@ async def _probe(hass: HomeAssistant, url: str, token: str) -> tuple[bool, str]:
 
 
 class InkFrameConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -80,6 +80,33 @@ class InkFrameConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry) -> InkFrameOptionsFlow:
         return InkFrameOptionsFlow()
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add the required bearer to an entry created before v2."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            url = user_input[CONF_URL].rstrip("/")
+            token = user_input[CONF_TOKEN].strip()
+            ok, msg = await _probe(self.hass, url, token)
+            if ok:
+                self.hass.config_entries.async_update_entry(
+                    entry, data={CONF_URL: url, CONF_TOKEN: token}
+                )
+                await self.hass.config_entries.async_reload(entry.entry_id)
+                return self.async_abort(reason="reconfigure_successful")
+            _LOGGER.warning("InkFrame reconfigure probe failed: %s", msg)
+            errors["base"] = "cannot_connect"
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({
+                vol.Required(CONF_URL, default=entry.data.get(CONF_URL, DEFAULT_URL)): str,
+                vol.Required(CONF_TOKEN): str,
+            }),
+            errors=errors,
+        )
 
 
 class InkFrameOptionsFlow(OptionsFlow):

@@ -100,8 +100,9 @@ esphome run firmware/immich-frame.yaml
 Without HACS: copy `custom_components/inkframe` into `<config>/custom_components/` and restart.
 
 **Upgrading from an older release:** access is now authenticated. Create the
-token file, add `inkframe_token` to ESPHome secrets and re-add the InkFrame
-integration with that token before deploying the protected renderer.
+token file, add `inkframe_token` to ESPHome secrets, then use **Reconfigure**
+on the existing InkFrame integration to enter that token before deploying the
+protected renderer.
 
 Full walkthroughs: [Hardware](docs/hardware.md) · [Firmware](docs/firmware.md) · [Home Assistant](docs/home-assistant.md) · [Operations](docs/operations.md) · [Releasing](docs/releasing.md).
 

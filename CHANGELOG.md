@@ -6,6 +6,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-18
+
 ### Fixed
 - **Renderer access is authenticated.** Every frame, wake, source, settings
   and status request now needs a shared bearer token. Docker liveness remains
@@ -15,15 +17,20 @@ All notable changes to this project are recorded here. The format follows
   Album and Search controls first collect a value, then switch source; clearing
   an active search returns safely to Random instead of issuing an invalid
   empty search.
-- **Photographs only now means every non-album source.** Person, People,
-  Recent and Search honour the same camera-EXIF setting as Random.
+- **The Source entity no longer crashes while building its options.** Album
+  and Search values are read from the coordinator before they are considered.
+- **Existing integrations can upgrade to authentication.** Pre-token entries
+  migrate safely and expose Home Assistant's Reconfigure action for the token,
+  instead of failing with a missing-key exception.
+- **Photographs only now means every source.** Person, People, Album, Recent
+  and Search honour the same camera-EXIF setting as Random.
 - **A recovered renderer clears its old error.** A successful render no longer
   leaves a historic failure looking current in Home Assistant diagnostics.
 - **The nursery dashboard now reports actual playback, not merely page JavaScript.** A kiosk
   heartbeat advances only when the baby camera's video time advances. The
   page detects a player that never starts as well as a frozen frame, remounts
-  it locally, then permits one conservative HA page refresh if playback stays
-  stale.
+  it locally, then permits at most three HA page refreshes if playback stays
+  stale; a confirmed playback heartbeat refills the budget.
 
 ## [0.2.0] - 2026-09-18
 
@@ -79,6 +86,7 @@ All notable changes to this project are recorded here. The format follows
 - **Home Assistant integration** `inkframe`: Source (Random, Recent, People, Album, or a person), per-person Include switches, Album select, Recent window, Max busyness, Sleep interval, OTA window, render knobs, Photographs only, Next photo, Preview image, Photo, Busyness, On panel, Last panel fetch, diagnostics.
 - CI: renderer tests, generated-docs check, hassfest, HACS validation, ESPHome config validation.
 
-[Unreleased]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CaputoDavide93/InkFrame-Immich/releases/tag/v0.1.0

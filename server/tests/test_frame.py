@@ -381,6 +381,26 @@ def test_photo_only_switch_reaches_every_non_album_source():
     from immich import Immich
 
     pool = inspect.getsource(app.FrameStore._pool)
-    assert pool.count("require_camera=require_camera") >= 4
-    for method in (Immich.by_person, Immich.recent, Immich.by_search):
+    assert pool.count("require_camera=require_camera") >= 5
+    for method in (Immich.by_person, Immich.by_album, Immich.recent, Immich.by_search):
         assert "require_camera" in inspect.signature(method).parameters
+
+
+def test_source_options_reads_coordinator_data_before_using_it():
+    """A missing local `data` makes HA fail while rendering the select."""
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).parents[1]
+    component = root / "custom_components" / "inkframe" / "select.py"
+    # The exported repository puts tests under server/, alongside a top-level
+    # custom_components directory; the private source does not.
+    if not component.exists():
+        component = root.parent / "custom_components" / "inkframe" / "select.py"
+    tree = ast.parse(component.read_text())
+    options = next(node for node in ast.walk(tree)
+                   if isinstance(node, ast.FunctionDef) and node.name == "options")
+    assigned = {target.id for node in ast.walk(options)
+                if isinstance(node, ast.Assign) for target in node.targets
+                if isinstance(target, ast.Name)}
+    assert "data" in assigned
