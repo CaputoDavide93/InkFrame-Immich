@@ -65,3 +65,48 @@ def test_quotes_balance_once_github_has_decoded_the_block():
             if text.count('"') % 2:
                 bad.append(f"{path}:{line + offset}: odd number of quotes: {text.strip()[:70]}")
     assert not bad, "a label ends early once decoded:\n  " + "\n  ".join(bad)
+
+
+def test_the_architecture_svgs_match_their_generator():
+    """The drawing is code, so a hand-edited SVG is a lie waiting to happen.
+
+    Mermaid was replaced here because GitHub controls too much of it: it decodes
+    entities before parsing, ignores `%%{init}%%`, pins its own version and
+    picks the theme. An SVG drawn by `tools/gen_diagram.py` has none of those
+    limits -- and one obligation, which this test is: what is committed has to
+    be what the generator produces.
+    """
+    import subprocess
+    import sys
+
+    candidates = (ROOT / "tools" / "gen_diagram.py", ROOT.parent / "tools" / "gen_diagram.py")
+    gen = next((p for p in candidates if p.exists()), None)
+    # A missing generator here means export-public.sh did not carry it: the
+    # repository has more than one list that has to name a file, and a file in
+    # one but not the other passes every test in the tree it was written in.
+    assert gen is not None, (
+        "tools/gen_diagram.py is not beside this test. If this is the public "
+        "repository, add it to the cp line in tools/export-public.sh."
+    )
+    sys.path.insert(0, str(gen.parent))
+    import importlib
+    module = importlib.import_module("gen_diagram")
+    importlib.reload(module)
+    for scheme in module.SCHEMES:
+        committed = (ROOT / "docs" / "assets" / f"architecture-{scheme}.svg").read_text(encoding="utf-8")
+        assert committed == module.diagram(scheme), (
+            f"docs/assets/architecture-{scheme}.svg is not what tools/gen_diagram.py "
+            "draws -- re-run it rather than editing the SVG"
+        )
+
+
+def test_the_svgs_carry_nothing_github_will_strip():
+    """GitHub sanitises SVG in markdown: no <script>, no <style>, no web font.
+
+    A rule written into the file, because the failure is silent -- the diagram
+    renders, just without whatever was stripped.
+    """
+    for scheme in ("light", "dark"):
+        svg = (ROOT / "docs" / "assets" / f"architecture-{scheme}.svg").read_text(encoding="utf-8")
+        for banned in ("<script", "<style", "@import", "<foreignObject"):
+            assert banned not in svg, f"architecture-{scheme}.svg contains {banned}, which GitHub strips"

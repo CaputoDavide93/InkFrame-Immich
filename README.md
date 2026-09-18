@@ -42,22 +42,11 @@ Three things decide whether a photo looks good on a one-bit panel, and none of t
 
 ## 🗺️ Architecture
 
-```mermaid
-flowchart LR
-    IM["📚 Immich<br/>your photo library"]
-    RS["🧠 Renderer<br/>picks and prepares one photo"]
-    PN["📟 ePaper frame<br/>awake about 35s a week"]
-    HA["🏠 Home Assistant<br/>settings · previews · next photo"]
-
-    IM -->|"20 scored candidates"| RS
-    RS -->|"one 800x480 one-bit frame"| PN
-    HA <-->|"control and status"| RS
-
-    classDef hub fill:#6f42c1,stroke:#6f42c1,color:#ffffff
-    classDef device fill:#9a6700,stroke:#9a6700,color:#ffffff
-    class RS hub
-    class PN device
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
+  <img src="docs/assets/architecture-light.svg" width="100%"
+       alt="Immich sends twenty scored candidates to the renderer, which sends one 48 KB one-bit frame to the ePaper frame. Home Assistant exchanges control and status with the renderer. The panel never talks to Home Assistant.">
+</picture>
 
 The panel never talks to Home Assistant and Home Assistant never talks to the panel. Both talk to the renderer, which is awake all the time. A setting you change in Home Assistant is stored on the renderer and takes effect at the panel's next wake. The one entity that tells you whether a photo actually reached the glass is `On panel`; see [why that matters](docs/home-assistant.md#rendered-is-not-displayed).
 
