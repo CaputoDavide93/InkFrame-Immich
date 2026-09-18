@@ -7,8 +7,8 @@ Plain HTTP, JSON in and out, no authentication. See [SECURITY.md](../SECURITY.md
 <!-- AUTOGEN:endpoints -->
 | Path | Purpose |
 |---|---|
-| `GET /healthz` | Liveness. Carries `generation`, which setup uses to tell a renderer from any other listener |
-| `GET /status` | Everything in one document: current photo, source, settings, people, `on_panel`, `last_error` |
+| `GET /healthz` | Unauthenticated liveness only; carries `generation` but no photo or state |
+| `GET /status` | Bearer-authenticated state: current photo, source, settings, people, `on_panel`, `last_error` |
 | `GET /wake` | **The panel's one call per wake.** Rotates only if the current frame was already collected; returns `sleep_seconds` and `ota_window_seconds` |
 | `GET /next` | Render a new photo now. Home Assistant's button. The panel never calls this |
 | `GET /frame.bmp` | The current frame as a 1-bit BMP. **Marks the frame as collected** |
@@ -50,6 +50,8 @@ Defaults for a fresh install. A value set through `/settings` is persisted and w
 | `IMMICH_URL` | Your Immich server | |
 | `IMMICH_API_KEY_FILE` | Path to a file holding the API key (preferred) | |
 | `IMMICH_API_KEY` | The API key inline, for quick tests | |
+| `INKFRAME_TOKEN_FILE` | Path to the shared panel/Home Assistant bearer token (preferred) | |
+| `INKFRAME_TOKEN` | The renderer token inline, for local tests only | |
 | `LISTEN_HOST` | Bind address | `0.0.0.0` |
 | `LISTEN_PORT` | Port | `8099` |
 | `STATE_FILE` | Where the source and settings persist | `/data/state.json` |

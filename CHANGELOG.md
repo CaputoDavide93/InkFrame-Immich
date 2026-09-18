@@ -6,7 +6,24 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+- **Renderer access is authenticated.** Every frame, wake, source, settings
+  and status request now needs a shared bearer token. Docker liveness remains
+  public but exposes no photo or source data. The ESPHome panel and Home
+  Assistant integration send the token in an `Authorization` header.
+- **Invalid Album/Search selections are no longer offered.** Their dedicated
+  Album and Search controls first collect a value, then switch source; clearing
+  an active search returns safely to Random instead of issuing an invalid
+  empty search.
+- **Photographs only now means every non-album source.** Person, People,
+  Recent and Search honour the same camera-EXIF setting as Random.
+- **A recovered renderer clears its old error.** A successful render no longer
+  leaves a historic failure looking current in Home Assistant diagnostics.
+- **The nursery dashboard now reports actual playback, not merely page JavaScript.** A kiosk
+  heartbeat advances only when the baby camera's video time advances. The
+  page detects a player that never starts as well as a frozen frame, remounts
+  it locally, then permits one conservative HA page refresh if playback stays
+  stale.
 
 ## [0.2.0] - 2026-09-18
 

@@ -54,8 +54,13 @@ class SourceSelect(InkFrameEntity, SelectEntity):
             name for name, info in self.coordinator.people.items()
             if isinstance(info, dict) and info.get("eligible")
         )
-        options = [SOURCE_RANDOM, SOURCE_RECENT, SOURCE_PEOPLE, SOURCE_ALBUM,
-                   SOURCE_SEARCH, *people]
+        # Album and Search have mandatory companion values. Their dedicated
+        # picker/text entities switch the source after they collect one.
+        options = [SOURCE_RANDOM, SOURCE_RECENT, SOURCE_PEOPLE, *people]
+        if data.get("source_album"):
+            options.append(SOURCE_ALBUM)
+        if data.get("source_query"):
+            options.append(SOURCE_SEARCH)
         current = self.current_option
         # A person who dropped below the threshold since being chosen must
         # still appear, or HA shows the select as invalid.
@@ -100,9 +105,9 @@ class SourceSelect(InkFrameEntity, SelectEntity):
         elif option == SOURCE_PEOPLE:
             await self.coordinator.async_set_source("people")
         elif option == SOURCE_ALBUM:
-            await self.coordinator.async_set_source("album")
+            await self.coordinator.async_set_source("album", album=data.get("source_album"))
         elif option == SOURCE_SEARCH:
-            await self.coordinator.async_set_source("search")
+            await self.coordinator.async_set_source("search", query=data.get("source_query"))
         else:
             await self.coordinator.async_set_source("person", person=option)
 

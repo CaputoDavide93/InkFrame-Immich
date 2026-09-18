@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import (
 
 from .const import (
     CONF_SCAN_SECONDS,
+    CONF_TOKEN,
     CONF_URL,
     DEFAULT_SCAN_SECONDS,
     DOMAIN,
@@ -40,6 +41,7 @@ class InkFrameCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.entry = entry
         self.url = entry.data[CONF_URL].rstrip("/")
+        self.token = entry.data[CONF_TOKEN]
         seconds = entry.options.get(CONF_SCAN_SECONDS, DEFAULT_SCAN_SECONDS)
         super().__init__(
             hass,
@@ -57,7 +59,7 @@ class InkFrameCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             name="InkFrame",
             manufacturer="Davide Caputo",
             model="InkFrame renderer",
-            configuration_url=f"{self.url}/preview.png",
+            configuration_url=f"{self.url}/healthz",
         )
 
     async def _get(self, path: str, timeout: int = HTTP_TIMEOUT_SECONDS,
@@ -66,6 +68,7 @@ class InkFrameCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with self._session.get(
                 f"{self.url}{path}",
                 params=params,
+                headers={"Authorization": f"Bearer {self.token}"},
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as response:
                 if response.status >= 400:

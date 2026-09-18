@@ -29,8 +29,8 @@ TARGETS = [ROOT / "README.md", ROOT / "docs" / "api.md"]
 # description, or a description for a route that no longer exists, fails the
 # build. That is the drift guard.
 ENDPOINTS = {
-    "/healthz": "Liveness. Carries `generation`, which setup uses to tell a renderer from any other listener",
-    "/status": "Everything in one document: current photo, source, settings, people, `on_panel`, `last_error`",
+    "/healthz": "Unauthenticated liveness only; carries `generation` but no photo or state",
+    "/status": "Bearer-authenticated state: current photo, source, settings, people, `on_panel`, `last_error`",
     "/wake": "**The panel's one call per wake.** Rotates only if the current frame was already collected; returns `sleep_seconds` and `ota_window_seconds`",
     "/next": "Render a new photo now. Home Assistant's button. The panel never calls this",
     "/frame.bmp": "The current frame as a 1-bit BMP. **Marks the frame as collected**",
@@ -47,6 +47,8 @@ ENV_NOTES = {
     "IMMICH_URL": "Your Immich server",
     "IMMICH_API_KEY_FILE": "Path to a file holding the API key (preferred)",
     "IMMICH_API_KEY": "The API key inline, for quick tests",
+    "INKFRAME_TOKEN_FILE": "Path to the shared panel/Home Assistant bearer token (preferred)",
+    "INKFRAME_TOKEN": "The renderer token inline, for local tests only",
     "LISTEN_HOST": "Bind address",
     "LISTEN_PORT": "Port",
     "STATE_FILE": "Where the source and settings persist",

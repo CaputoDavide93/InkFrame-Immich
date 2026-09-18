@@ -43,8 +43,11 @@ class SearchText(InkFrameEntity, TextEntity):
         if not value:
             # Clearing the box must not switch the source to one that cannot
             # work; leave whatever is selected alone.
+            mode = self.coordinator.source.partition(":")[0] or "random"
+            # Search cannot be valid with an empty term. Move to Random before
+            # clearing rather than leaving a source the renderer must reject.
             await self.coordinator.async_set_source(
-                self.coordinator.source.partition(":")[0] or "random", query=""
+                "random" if mode == "search" else mode, query=""
             )
             return
         await self.coordinator.async_set_source("search", query=value)

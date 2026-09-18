@@ -8,6 +8,7 @@ week. Everything set here takes effect at the panel's next wake, and
 DOMAIN = "inkframe"
 
 CONF_URL = "url"
+CONF_TOKEN = "token"
 CONF_SCAN_SECONDS = "scan_seconds"
 
 DEFAULT_URL = "http://immich-frame:8099"

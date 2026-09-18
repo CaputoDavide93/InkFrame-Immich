@@ -13,6 +13,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     CONF_SCAN_SECONDS,
+    CONF_TOKEN,
     CONF_URL,
     DEFAULT_SCAN_SECONDS,
     DEFAULT_URL,
@@ -23,12 +24,17 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _probe(hass: HomeAssistant, url: str) -> tuple[bool, str]:
-    """Is there a renderer at this URL? /healthz is cheap and unauthenticated."""
+async def _probe(hass: HomeAssistant, url: str, token: str) -> tuple[bool, str]:
+    """Is there a renderer at this URL with this credential?
+
+    `/healthz` deliberately stays unauthenticated for Docker liveness; setup
+    probes protected `/status`, which also proves the supplied token works.
+    """
     session = async_get_clientsession(hass)
     try:
         async with session.get(
-            f"{url.rstrip('/')}/healthz",
+            f"{url.rstrip('/')}/status",
+            headers={"Authorization": f"Bearer {token}"},
             timeout=aiohttp.ClientTimeout(total=5),
         ) as response:
             if response.status != 200:
@@ -52,18 +58,22 @@ class InkFrameConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             url = user_input[CONF_URL].rstrip("/")
+            token = user_input[CONF_TOKEN].strip()
             await self.async_set_unique_id(url)
             self._abort_if_unique_id_configured()
-            ok, msg = await _probe(self.hass, url)
+            ok, msg = await _probe(self.hass, url, token)
             if not ok:
                 _LOGGER.warning("InkFrame probe failed: %s", msg)
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_create_entry(
-                    title="InkFrame for Immich", data={CONF_URL: url}
+                    title="InkFrame for Immich", data={CONF_URL: url, CONF_TOKEN: token}
                 )
 
-        schema = vol.Schema({vol.Required(CONF_URL, default=DEFAULT_URL): str})
+        schema = vol.Schema({
+            vol.Required(CONF_URL, default=DEFAULT_URL): str,
+            vol.Required(CONF_TOKEN): str,
+        })
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
     @staticmethod

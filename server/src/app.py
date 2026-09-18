@@ -10,6 +10,7 @@ into the display with a few kilobytes of working memory.
 from __future__ import annotations
 
 import json
+import hmac
 import logging
 import os
 import threading
@@ -52,6 +53,19 @@ MIN_PERSON_PHOTOS = int(os.environ.get("MIN_PERSON_PHOTOS", "20"))
 PEOPLE_RECOUNT_SECONDS = int(os.environ.get("PEOPLE_RECOUNT_SECONDS", str(24 * 3600)))
 HEARTBEAT = os.environ.get("HEARTBEAT_FILE", "/tmp/immichframe-heartbeat")
 LAST_OK = os.environ.get("LAST_OK_FILE", "/tmp/immichframe-render-ok")
+
+
+def _read_renderer_token() -> str:
+    """Read the shared panel/Home Assistant token without putting it in URLs."""
+    path = os.environ.get("INKFRAME_TOKEN_FILE")
+    if path:
+        with open(path) as handle:
+            token = handle.read().strip()
+    else:
+        token = os.environ.get("INKFRAME_TOKEN", "").strip()
+    if not token:
+        raise SystemExit("INKFRAME_TOKEN_FILE or INKFRAME_TOKEN must be set")
+    return token
 
 
 def _read_api_key() -> str:
@@ -483,6 +497,7 @@ class FrameStore:
         self._persist(payload, saved)
         LOG.info("gen %d: %s busyness %.1f (best of %d) in %.2fs",
                  generation, asset.name, busyness, len(scored), elapsed)
+        self.last_error = None
         _touch(LAST_OK)
         return generation
 
@@ -498,6 +513,7 @@ class FrameStore:
         import random as _random
         mode = self.source.mode
         landscape_only = bool(self.source.settings["landscape_only"])
+        require_camera = bool(self.source.settings["require_camera"])
         if mode == "person":
             people = self.client.people()
             person_id = people.get(self.source.person)
@@ -508,7 +524,8 @@ class FrameStore:
                                               exclude=set(self.recent),
                                               require_camera=bool(self.source.settings["require_camera"]),
                                               landscape_only=landscape_only)
-            assets = self.client.by_person(person_id, landscape_only=landscape_only)
+            assets = self.client.by_person(person_id, landscape_only=landscape_only,
+                                           require_camera=require_camera)
         elif mode == "people":
             # OR, not AND: photos of ANY chosen person. Immich's own multi-
             # person search is AND -- assets containing everyone at once --
@@ -521,7 +538,8 @@ class FrameStore:
                 if not pid:
                     LOG.warning("person %r is not a named face; skipping", name)
                     continue
-                for asset in self.client.by_person(pid, landscape_only=landscape_only):
+                for asset in self.client.by_person(pid, landscape_only=landscape_only,
+                                                   require_camera=require_camera):
                     if asset["id"] not in seen:
                         seen.add(asset["id"])
                         assets.append(asset)
@@ -545,11 +563,13 @@ class FrameStore:
             assets = self.client.by_album(album_id, landscape_only=landscape_only)
         elif mode == "search":
             assets = self.client.by_search(self.source.query,
-                                           landscape_only=landscape_only)
+                                           landscape_only=landscape_only,
+                                           require_camera=require_camera)
             if not assets:
                 LOG.warning("nothing matched the search %r", self.source.query)
         elif mode == "recent":
-            assets = self.client.recent(days=self.source.days, landscape_only=landscape_only)
+            assets = self.client.recent(days=self.source.days, landscape_only=landscape_only,
+                                        require_camera=require_camera)
         else:
             return self.client.candidates(want=int(self.source.settings["candidates"]),
                                           exclude=set(self.recent),
@@ -656,9 +676,23 @@ class Handler(BaseHTTPRequestHandler):
         import json
         self._send(code, json.dumps(obj).encode() + b"\n", "application/json")
 
+    def _authorised(self) -> bool:
+        """Accept a bearer header, never a query token that logs in proxies."""
+        supplied = self.headers.get("Authorization", "")
+        if supplied.lower().startswith("bearer "):
+            supplied = supplied[7:].strip()
+        else:
+            supplied = self.headers.get("X-InkFrame-Token", "")
+        return bool(supplied) and hmac.compare_digest(supplied, self.token)
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
         url = urlparse(self.path)
         query = parse_qs(url.query, keep_blank_values=True)
+        # Docker needs an unauthenticated liveness probe, but every endpoint
+        # that reveals images/state or changes the frame requires the bearer.
+        if url.path != "/healthz" and not self._authorised():
+            self._json(401, {"error": "authorization required"})
+            return
         try:
             self._route(url.path, query)
         except Exception as exc:  # noqa: BLE001 - any failure becomes a 500, never a crash
@@ -672,8 +706,7 @@ class Handler(BaseHTTPRequestHandler):
         store = self.store
 
         if path == "/healthz":
-            self._json(200, {"ok": True, "generation": store.current,
-                             "last_error": store.last_error})
+            self._json(200, {"ok": True, "generation": store.current})
             return
 
         if path == "/people":
@@ -779,6 +812,7 @@ class Handler(BaseHTTPRequestHandler):
             # Rotate, then tell the panel which generation to fetch and how
             # many bytes it is. The panel needs no knowledge of the photo.
             generation = store.rotate()
+            store.last_error = None
             self._json(200, {"generation": generation, "bytes": FRAME_BYTES,
                              "width": 800, "height": 480})
             return
@@ -839,6 +873,7 @@ def main() -> None:
     client = Immich(IMMICH_URL, _read_api_key())
     store = FrameStore(client, Source(STATE_FILE))
     Handler.store = store
+    Handler.token = _read_renderer_token()
 
     def heartbeat() -> None:
         while True:

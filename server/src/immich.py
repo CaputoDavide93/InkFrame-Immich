@@ -138,7 +138,8 @@ class Immich:
         rows = data.get("people", data) if isinstance(data, dict) else data
         return {p["name"]: p["id"] for p in rows if p.get("name")}
 
-    def by_person(self, person_id: str, max_pages: int = 8, landscape_only: bool = True) -> list[dict]:
+    def by_person(self, person_id: str, max_pages: int = 8, landscape_only: bool = True,
+                  require_camera: bool = True) -> list[dict]:
         """Every landscape photograph of one person.
 
         `total` in a search response counts the page, not the result set, so it
@@ -153,12 +154,14 @@ class Immich:
             assets = self._call("/api/search/metadata", body).get("assets", {})
             for asset in assets.get("items", []):
                 exif = asset.get("exifInfo") or {}
-                if (not landscape_only or is_landscape(exif) is True) and has_camera(exif):
+                if ((not landscape_only or is_landscape(exif) is True)
+                        and (not require_camera or has_camera(exif))):
                     out.append(asset)
             page = assets.get("nextPage")
         return out
 
-    def recent(self, days: int = 90, max_pages: int = 6, landscape_only: bool = True) -> list[dict]:
+    def recent(self, days: int = 90, max_pages: int = 6, landscape_only: bool = True,
+               require_camera: bool = True) -> list[dict]:
         """Landscape photographs taken in the last N days."""
         import datetime
         after = (datetime.datetime.now(datetime.timezone.utc)
@@ -171,7 +174,8 @@ class Immich:
             assets = self._call("/api/search/metadata", body).get("assets", {})
             for asset in assets.get("items", []):
                 exif = asset.get("exifInfo") or {}
-                if (not landscape_only or is_landscape(exif) is True) and has_camera(exif):
+                if ((not landscape_only or is_landscape(exif) is True)
+                        and (not require_camera or has_camera(exif))):
                     out.append(asset)
             page = assets.get("nextPage")
         return out
@@ -228,7 +232,7 @@ class Immich:
         return rows if isinstance(rows, list) else []
 
     def by_search(self, query: str, landscape_only: bool = True,
-                  want: int = 120) -> list[dict]:
+                  require_camera: bool = True, want: int = 120) -> list[dict]:
         """Photographs matching a description, through Immich's CLIP search.
 
         This is the only way to put the cat on the frame: Immich clusters human
@@ -250,7 +254,7 @@ class Immich:
                 exif = asset.get("exifInfo") or {}
                 if landscape_only and is_landscape(exif) is not True:
                     continue
-                if not has_camera(exif):
+                if require_camera and not has_camera(exif):
                     continue
                 out.append(asset)
             page = assets.get("nextPage")

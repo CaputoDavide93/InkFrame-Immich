@@ -24,6 +24,9 @@ substitutions:
   # The renderer's URL, from secrets.yaml so this file carries no addresses.
   # The panel's network must be able to reach it over plain HTTP.
   frame_server: !secret frame_server_url
+  # Same secret used by the renderer and Home Assistant integration. It is a
+  # request header, never part of a URL that browser history or proxy logs see.
+  frame_token: !secret inkframe_token
   # FALLBACK only. The real sleep interval and OTA window arrive from the
   # server on every /wake, so both are Home Assistant settings and changing
   # them needs no reflash. These values are used when /wake cannot be reached,
@@ -125,6 +128,8 @@ font:
 online_image:
   - id: photo
     url: "${frame_server}/frame.bmp"
+    request_headers:
+      Authorization: "Bearer ${frame_token}"
     format: BMP
     type: BINARY
     resize: 800x480
@@ -202,6 +207,8 @@ script:
       # also carries the sleep interval and OTA window.
       - http_request.get:
           url: "${frame_server}/wake"
+          headers:
+            Authorization: "Bearer ${frame_token}"
           capture_response: true
           max_response_buffer_size: 512
           on_response:

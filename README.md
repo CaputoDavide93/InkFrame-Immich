@@ -71,6 +71,10 @@ You need an Immich server, Home Assistant, Docker, and the panel.
 mkdir -p ~/Secrets
 printf '%s' 'YOUR_IMMICH_API_KEY' > ~/Secrets/immich_frame_api_key
 chmod 644 ~/Secrets/immich_frame_api_key
+# One shared bearer for the panel and Home Assistant. Keep it secret; it grants
+# access to family-photo previews and renderer controls.
+openssl rand -hex 32 > ~/Secrets/inkframe_token
+chmod 644 ~/Secrets/inkframe_token
 ```
 
 **2. Run the renderer:**
@@ -79,7 +83,7 @@ chmod 644 ~/Secrets/immich_frame_api_key
 cd server
 cp .env.example .env          # set IMMICH_URL, at least
 docker compose up -d
-curl -s http://localhost:8099/status
+curl -s -H "Authorization: Bearer $(cat ~/Secrets/inkframe_token)" http://localhost:8099/status
 ```
 
 **3. Flash the panel.** Copy `firmware/secrets.yaml.example` to `firmware/secrets.yaml`, fill in Wi-Fi and keys, point `frame_server` at the renderer, then:
@@ -89,11 +93,15 @@ pip install esphome
 esphome run firmware/immich-frame.yaml
 ```
 
-**4. Add the integration.** In HACS, add `https://github.com/CaputoDavide93/InkFrame-Immich` as a custom repository (category *Integration*), install **InkFrame for Immich**, restart, then **Settings → Devices & Services → Add Integration → InkFrame for Immich** and enter the renderer URL.
+**4. Add the integration.** In HACS, add `https://github.com/CaputoDavide93/InkFrame-Immich` as a custom repository (category *Integration*), install **InkFrame for Immich**, restart, then **Settings → Devices & Services → Add Integration → InkFrame for Immich** and enter the renderer URL and the same `inkframe_token` used by the panel.
 
 [![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=CaputoDavide93&repository=InkFrame-Immich&category=integration)
 
 Without HACS: copy `custom_components/inkframe` into `<config>/custom_components/` and restart.
+
+**Upgrading from an older release:** access is now authenticated. Create the
+token file, add `inkframe_token` to ESPHome secrets and re-add the InkFrame
+integration with that token before deploying the protected renderer.
 
 Full walkthroughs: [Hardware](docs/hardware.md) · [Firmware](docs/firmware.md) · [Home Assistant](docs/home-assistant.md) · [Operations](docs/operations.md) · [Releasing](docs/releasing.md).
 

@@ -13,6 +13,7 @@ services:
       # Required. Set it in .env (copy .env.example).
       IMMICH_URL: ${IMMICH_URL:?set IMMICH_URL in .env}
       IMMICH_API_KEY_FILE: /run/secrets/immich_frame_api_key
+      INKFRAME_TOKEN_FILE: /run/secrets/inkframe_token
       RENDER_SMOOTH: ${RENDER_SMOOTH:-0.45}
       RENDER_CURVE: ${RENDER_CURVE:-0.35}
       RENDER_EDGE: ${RENDER_EDGE:-55}
@@ -27,6 +28,7 @@ services:
       - immich-frame-state:/data
     secrets:
       - immich_frame_api_key
+      - inkframe_token
 
 volumes:
   immich-frame-state:
@@ -35,3 +37,5 @@ secrets:
   immich_frame_api_key:
     # 0644: uid 1000 inside the container cannot read 0600.
     file: ${HOME}/Secrets/immich_frame_api_key
+  inkframe_token:
+    file: ${HOME}/Secrets/inkframe_token

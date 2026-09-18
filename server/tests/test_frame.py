@@ -361,3 +361,26 @@ def test_the_albums_route_refreshes_rather_than_only_reading():
     block = source.split('if path == "/albums":')[1].split("return")[0]
     assert "store.refresh_albums()" in block
     assert "store.client.albums()" not in block
+
+
+def test_renderer_routes_require_a_constant_time_bearer_check():
+    """A LAN listener is not an access-control boundary for family photos."""
+    import inspect
+    import app
+
+    source = inspect.getsource(app.Handler)
+    assert "hmac.compare_digest" in source
+    assert 'url.path != "/healthz" and not self._authorised()' in source
+    assert "Authorization" in source
+
+
+def test_photo_only_switch_reaches_every_non_album_source():
+    """The setting must mean the same thing for Random, faces and search."""
+    import inspect
+    import app
+    from immich import Immich
+
+    pool = inspect.getsource(app.FrameStore._pool)
+    assert pool.count("require_camera=require_camera") >= 4
+    for method in (Immich.by_person, Immich.recent, Immich.by_search):
+        assert "require_camera" in inspect.signature(method).parameters
