@@ -38,6 +38,18 @@ the library rather than the code. Album assets come from
 If you see it again: compare `assetCount` from `/api/albums` against what
 `/albums` and `/status` say the renderer found.
 
+## I made an album in Immich and the picker does not offer it
+
+Press **Refresh albums** in Home Assistant. The picker is filled from a cache
+the renderer rebuilds once a day beside the per-person counts, so an album made
+this afternoon is otherwise missing until tomorrow.
+
+Rendering never used that cache -- `/source?mode=album&album=<name>` and the
+render itself both read Immich live -- so an album was always usable by name
+while being invisible in the list. Two views of the same library disagreeing
+for a day reads as the integration not seeing the album at all, which is why
+`GET /albums` now writes what it read back into the cache.
+
 ## `/wake` and `/next` fail with "nothing matched"
 
 The chosen source has nothing eligible. For a person, check the count in the Source select's attributes; for an album, check it contains landscape photographs taken with a camera. Switch to Random to confirm the renderer itself is healthy. The message says

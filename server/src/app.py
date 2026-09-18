@@ -363,6 +363,21 @@ class FrameStore:
         with self.lock:
             return list(self._albums)
 
+    def refresh_albums(self) -> list[str]:
+        """Read the album list from Immich now and replace the daily cache.
+
+        The cache is filled once a day beside the people count, which is fine
+        for a frame that changes weekly and wrong for the five minutes after
+        somebody makes an album. Until this existed, a new album was usable
+        immediately by name -- rendering reads the live list -- but absent from
+        the Home Assistant picker until the next day, which reads as the
+        integration not seeing it at all.
+        """
+        albums = sorted(self.client.albums())
+        with self.lock:
+            self._albums = albums
+        return albums
+
     def people_summary(self, wait: bool = False) -> dict[str, dict]:
         if wait:
             self.people_ready.wait(timeout=90)
@@ -712,7 +727,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/albums":
-            self._json(200, {"albums": sorted(store.client.albums())})
+            # Live, and it updates the cache /status serves, so asking for the
+            # list is also how you refresh it.
+            self._json(200, {"albums": store.refresh_albums()})
             return
 
         if path == "/wake":

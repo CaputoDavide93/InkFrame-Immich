@@ -111,6 +111,17 @@ class InkFrameCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._get("/settings", params={k: str(v) for k, v in changes.items()})
         await self.async_request_refresh()
 
+    async def async_refresh_albums(self) -> None:
+        """Re-read the album list from Immich now.
+
+        `/status` serves a cache filled once a day, so an album made this
+        afternoon is not in the picker until tomorrow. `/albums` reads Immich
+        live and replaces that cache, which is why this is a GET of a list
+        rather than a write.
+        """
+        await self._get("/albums")
+        await self.async_request_refresh()
+
     async def async_next_photo(self) -> None:
         await self._get("/next", timeout=NEXT_TIMEOUT_SECONDS)
         await self.async_request_refresh()

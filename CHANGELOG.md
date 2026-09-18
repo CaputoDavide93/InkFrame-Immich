@@ -6,6 +6,10 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-09-18
+
 ### Added
 - **A Search source.** Immich's CLIP search picks photos by description, so
   `cat` puts the family pet on the frame -- face recognition clusters people,
@@ -23,6 +27,11 @@ All notable changes to this project are recorded here. The format follows
 - Brand assets under `brand/`, drawn by `tools/gen_brand.py`.
 - A demo image in the README: a synthetic scene beside its one-bit render.
 - Issue templates and Dependabot for the GitHub Actions used by CI.
+- **A `Refresh albums` button.** The album picker is filled from a cache the
+  renderer rebuilds once a day beside the per-person counts, so an album made
+  this afternoon was absent from Home Assistant until tomorrow -- while
+  rendering, which reads Immich live, would have used it happily. `GET /albums`
+  now writes what it read back into that cache, and the button reaches it.
 
 ### Fixed
 - **An album with photos reported as empty.** `/api/albums/{id}` returns
@@ -53,5 +62,6 @@ All notable changes to this project are recorded here. The format follows
 - **Home Assistant integration** `inkframe`: Source (Random, Recent, People, Album, or a person), per-person Include switches, Album select, Recent window, Max busyness, Sleep interval, OTA window, render knobs, Photographs only, Next photo, Preview image, Photo, Busyness, On panel, Last panel fetch, diagnostics.
 - CI: renderer tests, generated-docs check, hassfest, HACS validation, ESPHome config validation.
 
-[Unreleased]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CaputoDavide93/InkFrame-Immich/releases/tag/v0.1.0

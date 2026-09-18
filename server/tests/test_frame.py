@@ -329,3 +329,35 @@ def test_restarting_does_not_consume_a_photo():
             if "rotate" in ast.unparse(node):
                 guarded = True
     assert guarded, "main() rotates at start-up without first checking for a restored frame"
+
+
+def test_asking_for_the_album_list_also_refreshes_the_cache(tmp_path):
+    """`/status` serves a cache filled once a day beside the people count, so
+    an album made this afternoon was absent from the Home Assistant picker
+    until tomorrow -- while rendering, which reads the live list, would have
+    used it happily. Two views of the same library disagreeing for a day is
+    indistinguishable from the integration not seeing the album at all, so
+    `/albums` writes what it read back into the cache."""
+    import threading
+    import app
+
+    store = app.FrameStore.__new__(app.FrameStore)
+    store.lock = threading.Lock()
+    store._albums = ["Old"]
+    store.client = type("C", (), {"albums": lambda self: {"New": "id2", "Old": "id1"}})()
+
+    assert store.albums_cached() == ["Old"]
+    assert store.refresh_albums() == ["New", "Old"]
+    assert store.albums_cached() == ["New", "Old"]
+
+
+def test_the_albums_route_refreshes_rather_than_only_reading():
+    """The route must go through refresh_albums(), not straight to the client:
+    a read that leaves the cache stale is the bug this fixed."""
+    import inspect
+    import app
+
+    source = inspect.getsource(app.Handler)
+    block = source.split('if path == "/albums":')[1].split("return")[0]
+    assert "store.refresh_albums()" in block
+    assert "store.client.albums()" not in block

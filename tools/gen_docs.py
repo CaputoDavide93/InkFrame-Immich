@@ -40,7 +40,7 @@ ENDPOINTS = {
     "/source": "Read or set where photos come from. Persisted",
     "/settings": "Read or set runtime settings. Validated; persisted",
     "/people": "Named faces with landscape counts and `eligible`",
-    "/albums": "Album names",
+    "/albums": "Album names, read live. Also refreshes the cache `/status` serves",
 }
 
 ENV_NOTES = {

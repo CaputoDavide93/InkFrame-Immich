@@ -18,7 +18,7 @@ Plain HTTP, JSON in and out, no authentication. See [SECURITY.md](../SECURITY.md
 | `GET /source` | Read or set where photos come from. Persisted |
 | `GET /settings` | Read or set runtime settings. Validated; persisted |
 | `GET /people` | Named faces with landscape counts and `eligible` |
-| `GET /albums` | Album names |
+| `GET /albums` | Album names, read live. Also refreshes the cache `/status` serves |
 <!-- /AUTOGEN:endpoints -->
 
 ## Settings

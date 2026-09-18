@@ -18,6 +18,7 @@ The poll interval is an option on the integration; the default is 300 seconds.
 | **Source** | select | Random, Recent, People, Album, or one named person |
 | **Include *Name*** | switch, one per eligible person | Who the People source draws from |
 | **Album** | select | Which album, when Source is Album. Choosing one switches Source to Album |
+| **Refresh albums** | button | Re-read the album list from Immich. The picker is otherwise filled once a day, so a new album waits until tomorrow. Config section |
 | **Recent window** | number, days | The N in Recent |
 | **Next photo** | button | Render a new photo now. The panel collects it at its next wake |
 | **Max busyness** | number | Reject threshold for the busyness score. The knob that most changes which photos appear |
