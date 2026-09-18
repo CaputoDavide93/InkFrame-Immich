@@ -43,21 +43,18 @@ Three things decide whether a photo looks good on a one-bit panel, and none of t
 ## 🗺️ Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"curve": "basis", "padding": 12}, "themeVariables": {"edgeLabelBackground": "transparent"}}}%%
 flowchart LR
     IM["📚 Immich<br/>your photo library"]
     RS["🧠 Renderer<br/>picks and prepares one photo"]
     PN["📟 ePaper frame<br/>awake about 35s a week"]
     HA["🏠 Home Assistant<br/>settings · previews · next photo"]
 
-    IM -->|"20 candidates,<br/>scored"| RS
-    RS -->|"one 800x480<br/>one-bit frame"| PN
+    IM -->|"20 scored candidates"| RS
+    RS -->|"one 800x480 one-bit frame"| PN
     HA <-->|"control and status"| RS
 
-    classDef plain fill:#161b22,stroke:#30363d,color:#e6edf3
-    classDef hub fill:#6f42c1,stroke:#8957e5,color:#ffffff
-    classDef device fill:#9a6700,stroke:#bb8009,color:#ffffff
-    class IM,HA plain
+    classDef hub fill:#6f42c1,stroke:#6f42c1,color:#ffffff
+    classDef device fill:#9a6700,stroke:#9a6700,color:#ffffff
     class RS hub
     class PN device
 ```
