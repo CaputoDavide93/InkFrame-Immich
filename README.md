@@ -104,7 +104,7 @@ token file, add `inkframe_token` to ESPHome secrets, then use **Reconfigure**
 on the existing InkFrame integration to enter that token before deploying the
 protected renderer.
 
-Full walkthroughs: [Hardware](docs/hardware.md) · [Firmware](docs/firmware.md) · [Home Assistant](docs/home-assistant.md) · [Operations](docs/operations.md) · [Releasing](docs/releasing.md).
+Full walkthroughs: [Hardware](docs/hardware.md) · [Firmware](docs/firmware.md) · [Wake and sleep](docs/wake-and-sleep.md) · [Home Assistant](docs/home-assistant.md) · [Operations](docs/operations.md) · [Releasing](docs/releasing.md).
 
 ---
 
@@ -125,6 +125,8 @@ Every knob has a sensible default. Home Assistant can change the ones marked ✅
 | `landscape_only` | bool | on / off | Skip portraits. Off means they are cropped to fit, with the window placed on the faces Immich found | ✅ |
 | `sleep_hours` | float | 1 to 336 | Delivered to the panel on `/wake` | ✅ |
 | `ota_window_seconds` | int | 5 to 300 | Delivered to the panel on `/wake` | ✅ |
+| `refresh_days` | int | 1 to 30 | How often the picture on the glass actually changes. Most wakes only CHECK (~7s); a draw is ~35s | ✅ |
+| `refresh_hour` | int | 0 to 23 | Local hour for the scheduled draw. The first check at or after it, never an exact alarm | ✅ |
 <!-- /AUTOGEN:settings -->
 
 Environment variables set the defaults for a fresh install. The full list, generated from the code, is in [docs/api.md](docs/api.md#environment-variables).

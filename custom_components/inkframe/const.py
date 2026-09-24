@@ -41,7 +41,13 @@ NO_ALBUMS = "(no albums in Immich)"
 #   device page's settings section), icon, unit
 NUMBER_SETTINGS: tuple[tuple[str, str, float, float, float, str | None, str, str | None], ...] = (
     ("max_busyness", "Max busyness", 1, 100, 0.5, None, "mdi:blur", None),
+    # How often the panel WAKES to check. Not how often the photo changes:
+    # that is `refresh_days`, below (2026-09-24 -- the dashboard had labelled
+    # this "New photograph every" and read 6 h for a frame that draws every
+    # third day).
     ("sleep_hours", "Sleep interval", 1, 336, 1, None, "mdi:sleep", "h"),
+    ("refresh_days", "Photo every", 1, 30, 1, None, "mdi:calendar-refresh", "d"),
+    ("refresh_hour", "Photo hour", 0, 23, 1, "config", "mdi:clock-time-seven-outline", "h"),
     ("ota_window_seconds", "OTA window", 5, 300, 5, "config", "mdi:update", "s"),
     ("smooth", "Smooth", 0, 1, 0.05, "config", "mdi:blur-linear", None),
     ("curve", "Tone curve", 0, 1, 0.05, "config", "mdi:chart-bell-curve-cumulative", None),

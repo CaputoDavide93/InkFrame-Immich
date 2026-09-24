@@ -6,6 +6,33 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-24
+
+### Added
+- **Check often, draw rarely.** The panel wakes every *Sleep interval* hours
+  only to ask whether a new photo is due (about seven seconds awake), and
+  draws a new one every *Photo every* days at *Photo hour* (about thirty-five
+  seconds). `docs/wake-and-sleep.md` explains the two cadences.
+- **Photo every** and **Photo hour** settings, so the photo cadence is
+  controlled separately from the wake interval.
+- **Last check-in** sensor: when the panel last woke, including checks that
+  drew nothing. This is the heartbeat; *Last panel fetch* is the last draw.
+- **Next photo** sensor: when the next new photo is due. The renderer's
+  `/status` publishes it as `next_refresh_at`.
+
+### Fixed
+- **A failed people count retries** instead of waiting a day. A renderer that
+  started before Immich was listening used to report no eligible people, and
+  offer no *Include* switches, until the next daily count.
+- **The panel sleeps for the interval you set**, not a fixed week.
+- **The firmware example secrets list `inkframe_token`**, so the firmware
+  validates when set up from the example.
+- **The renderer no longer runs as root.** The image runs as uid 1000, as the
+  documentation already said. A `immich-frame-volume-init` one-shot in
+  `docker-compose.yml` chowns an existing state volume in place before the
+  renderer starts, so a volume created by an earlier release keeps its saved
+  source choice; a fresh volume inherits the right owner from the image.
+
 ## [0.2.1] - 2026-09-18
 
 ### Fixed

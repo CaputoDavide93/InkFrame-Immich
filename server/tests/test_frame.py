@@ -404,3 +404,83 @@ def test_source_options_reads_coordinator_data_before_using_it():
                 if isinstance(node, ast.Assign) for target in node.targets
                 if isinstance(target, ast.Name)}
     assert "data" in assigned
+
+
+def test_a_failed_people_count_says_so_instead_of_only_logging():
+    """On 2026-09-22 this container started before Immich was listening.
+
+    The one daily count died on a refused connection, was logged and
+    swallowed, and `/people` served `{}` for the next 22 hours. In Home
+    Assistant that meant the three `Include <person>` switches -- which are
+    created only for people the renderer calls eligible -- were never created
+    at all, and the People source had nobody to draw from. Nothing was broken;
+    the renderer had asked once, at the only minute of the day the answer was
+    unavailable.
+
+    A caller cannot retry an outcome it cannot see, so the count reports one.
+    """
+    import threading
+    import app
+
+    def store_with(client):
+        store = app.FrameStore.__new__(app.FrameStore)
+        store.lock = threading.Lock()
+        store.people_ready = threading.Event()
+        store.people = {}
+        store.people_counted_at = None
+        store._albums = []
+        store.client = client
+        store.source = type("S", (), {"settings": {"require_camera": False}})()
+        return store
+
+    class Refused:
+        def people(self):
+            raise ConnectionRefusedError(111, "Connection refused")
+
+    class Answers:
+        def people(self):
+            return {"Alex": "id1"}
+
+        def by_person(self, pid, require_camera=False):
+            return list(range(50))
+
+        def albums(self):
+            return {"Trips": "a1"}
+
+    failed = store_with(Refused())
+    assert failed.count_people() is False
+    assert failed.people_summary() == {}
+    # Still SET on failure: people_summary(wait=True) must not block for its
+    # full 90 seconds on every request while Immich is down.
+    assert failed.people_ready.is_set()
+
+    ok = store_with(Answers())
+    assert ok.count_people() is True
+    assert ok.people_summary()["Alex"]["eligible"] is True
+
+
+def test_a_failed_count_retries_instead_of_sleeping_a_whole_day():
+    """The loop must branch on the outcome, and the wait must grow.
+
+    A frame that refreshes every three days gains nothing from asking Immich
+    every thirty seconds for an hour, so this is a backoff and not a hammer --
+    and the backoff is capped by the ordinary daily interval, because waiting
+    longer than the next scheduled count would have been is never useful.
+    """
+    import ast
+    import inspect
+    import app
+
+    source = inspect.getsource(app.main)
+    loop = next(n for n in ast.walk(ast.parse(source))
+                if isinstance(n, ast.FunctionDef) and n.name == "recount_people")
+    body = ast.unparse(loop)
+
+    assert "if store.count_people():" in body, \
+        "the recount loop ignores the outcome, so a failure still costs a day"
+    assert "PEOPLE_RETRY_FIRST_SECONDS" in body
+    assert "PEOPLE_RETRY_MAX_SECONDS" in body
+    assert "wait * 2" in body, "the retry wait must grow, not stay flat"
+    assert "min(wait, PEOPLE_RECOUNT_SECONDS)" in body, \
+        "a retry must never wait longer than the ordinary daily count"
+    assert app.PEOPLE_RETRY_MAX_SECONDS < app.PEOPLE_RECOUNT_SECONDS

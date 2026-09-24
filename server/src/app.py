@@ -9,6 +9,7 @@ into the display with a few kilobytes of working memory.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import hmac
 import logging
@@ -51,6 +52,20 @@ STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
 # Below it the source runs dry against the recently-shown list and repeats.
 MIN_PERSON_PHOTOS = int(os.environ.get("MIN_PERSON_PHOTOS", "20"))
 PEOPLE_RECOUNT_SECONDS = int(os.environ.get("PEOPLE_RECOUNT_SECONDS", str(24 * 3600)))
+# A FAILED count must not cost a whole day. On 2026-09-22 this container came
+# up before Immich was listening, the one daily count died on a refused
+# connection, and /people served {} for the next 22 hours -- which in Home
+# Assistant meant the three "Include <person>" switches were never created and
+# the People source had nobody to draw from. Nothing was broken; the renderer
+# had simply asked once, at the only moment in the day the answer was
+# unavailable.
+#
+# So a failure retries, and the wait GROWS rather than hammering: a frame that
+# refreshes every three days gains nothing from asking Immich every thirty
+# seconds for an hour. Doubling from 30s to a 15-minute ceiling covers a slow
+# co-start in the first minute and a longer Immich outage without noise.
+PEOPLE_RETRY_FIRST_SECONDS = 30
+PEOPLE_RETRY_MAX_SECONDS = 15 * 60
 HEARTBEAT = os.environ.get("HEARTBEAT_FILE", "/tmp/immichframe-heartbeat")
 LAST_OK = os.environ.get("LAST_OK_FILE", "/tmp/immichframe-render-ok")
 
@@ -100,6 +115,24 @@ SETTING_SPEC: dict[str, tuple[type, float, float, object]] = {
     # frame; the panel gets seconds.
     "sleep_hours":        (float, 1, 336, float(os.environ.get("SLEEP_HOURS", "168"))),
     "ota_window_seconds": (int,   5, 300, int(os.environ.get("OTA_WINDOW_SECONDS", "20"))),
+    # CHECKING IS NOT DRAWING, AND ONLY DRAWING IS EXPENSIVE.
+    #
+    # A wake that draws runs about 35 seconds: associate, /wake, fetch,
+    # refresh, then hold the OTA window. A wake that only asks "is there a
+    # photo for me?" skips the fetch, the refresh AND the OTA hold -- that
+    # hold lives inside on_download_finished and there is no download -- so
+    # it is about 7 seconds. Five times cheaper.
+    #
+    # That makes the two cadences worth separating. The panel can wake often
+    # enough to be responsive when somebody asks for a photo, while the
+    # picture on the wall only changes every few days. Four checks a day plus
+    # a draw every third day is ~40s awake per day; drawing every 8 hours is
+    # ~105s.
+    "refresh_days": (int, 1, 30, int(os.environ.get("REFRESH_DAYS", "3"))),
+    # Local hour for the scheduled draw. The panel wakes on its own timer and
+    # deep sleep drifts, so this is "the first check at or after this hour",
+    # never an exact alarm.
+    "refresh_hour": (int, 0, 23, int(os.environ.get("REFRESH_HOUR", "7"))),
 }
 
 
@@ -241,6 +274,11 @@ class FrameStore:
         # has been rendered. E-paper holds its last image with no power, so a
         # frame nobody collected looks identical to one on the wall.
         self.fetched_generation = 0
+        # The heartbeat. On a multi-day draw cycle the FETCH timestamp cannot
+        # tell you the panel is alive -- three days without one is normal --
+        # so the check itself has to be the evidence. 0 means "has not called
+        # since this process started", which is honest rather than stale.
+        self.last_wake_at = 0.0
         self.fetched_at: float | None = None
         # name -> {"landscape": n, "eligible": bool}. Counting means paging
         # every named person's photos, ~20-30s for this library, so it runs
@@ -353,7 +391,13 @@ class FrameStore:
         except OSError as exc:
             LOG.warning("could not persist the %s frame: %s", slot, exc)
 
-    def count_people(self) -> None:
+    def count_people(self) -> bool:
+        """Recount eligible people. True if the count actually landed.
+
+        The return value is what lets the caller retry: before it existed the
+        only outcome was a log line, so the scheduling loop could not tell a
+        good count from a refused connection and slept a day either way.
+        """
         try:
             named = self.client.people()
             summary: dict[str, dict] = {}
@@ -369,9 +413,14 @@ class FrameStore:
                 self._albums = albums
             eligible = sorted(k for k, v in summary.items() if v["eligible"])
             LOG.info("people counted: %d named, eligible: %s", len(summary), eligible)
+            return True
         except Exception as exc:  # noqa: BLE001 - a failed count must not stop the frame
             LOG.warning("people count failed: %s", exc)
+            return False
         finally:
+            # Set on FAILURE too. people_summary(wait=True) must not block for
+            # its full 90 seconds on every request while Immich is down; an
+            # empty answer now beats a slow empty answer later.
             self.people_ready.set()
 
     def albums_cached(self) -> list[str]:
@@ -399,6 +448,60 @@ class FrameStore:
             self.people_ready.wait(timeout=90)
         with self.lock:
             return dict(self.people)
+    def scheduled_refresh_due(self) -> bool:
+        """Is this the first check at or after the refresh hour, on the day
+        the picture is due to change?
+
+        Date arithmetic, not elapsed seconds, and deliberately so. "Every
+        three days at 7am" against a clock that drifts (deep sleep is not
+        precise, and the panel wakes on its own timer) has to mean "the first
+        check on or after that morning", or the draw slides a little later
+        every cycle until it happens at night.
+        """
+        cfg = self.source.settings
+        days = int(cfg.get("refresh_days", 3))
+        hour = int(cfg.get("refresh_hour", 7))
+        now = dt.datetime.now().astimezone()
+        if now.hour < hour:
+            return False
+        if not self.fetched_at:
+            # Never collected anything. /wake's `first_ever` covers generation
+            # 0; past that, draw rather than wait days to start the cycle.
+            return True
+        last = dt.datetime.fromtimestamp(self.fetched_at).astimezone()
+        return (now.date() - last.date()).days >= days
+
+    def next_refresh_at(self) -> float | None:
+        """When the next DRAW is due, as a timestamp; None before the first one.
+
+        The same arithmetic as `next_refresh_description`, as a number Home
+        Assistant can use. Until 2026-09-24 the only machine-readable times
+        were the last collection and the last wake, and the dashboard derived
+        "Next Wake" from the collection -- which since the check/draw split is
+        one to three days old, so it read "Due Now" permanently.
+        """
+        if not self.fetched_at:
+            return None
+        cfg = self.source.settings
+        days = int(cfg.get("refresh_days", 3))
+        hour = int(cfg.get("refresh_hour", 7))
+        last = dt.datetime.fromtimestamp(self.fetched_at).astimezone()
+        due = (last + dt.timedelta(days=days)).replace(
+            hour=hour, minute=0, second=0, microsecond=0)
+        return due.timestamp()
+
+    def next_refresh_description(self) -> str:
+        """For the log line on a check, so a quiet wake still says something."""
+        cfg = self.source.settings
+        days = int(cfg.get("refresh_days", 3))
+        hour = int(cfg.get("refresh_hour", 7))
+        if not self.fetched_at:
+            return "unknown (nothing collected yet)"
+        last = dt.datetime.fromtimestamp(self.fetched_at).astimezone()
+        due = (last + dt.timedelta(days=days)).replace(
+            hour=hour, minute=0, second=0, microsecond=0)
+        return f"{due:%a %d %b %H:%M}"
+
     def rotate(self) -> int:
         """Render the next photo. Returns the new generation id.
 
@@ -773,20 +876,48 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/wake":
-            # The panel's one call per wake. Rotates ONLY if the current
-            # generation has already been collected: a frame Home Assistant
-            # rendered yesterday and nobody has seen yet is delivered before a
-            # new one is made. Also carries the wake parameters, so the sleep
-            # interval and OTA window are settings rather than firmware.
-            with store.lock:
-                collected = store.fetched_generation == store.current
-            if collected or store.current == 0:
-                generation = store.rotate()
-            else:
-                generation = store.current
-                LOG.info("wake: gen %d not yet collected, serving it", generation)
+            # The panel's one call per wake, and the ONLY place that decides
+            # whether the glass changes. The panel does what it is told.
+            #
+            # Most wakes are a question, not a refresh. A checking wake costs
+            # about 7 seconds against 35 for a drawing one, so the panel can
+            # wake four times a day and still spend less battery than drawing
+            # every eight hours. `draw` is what buys that.
+            #
+            # It is served even on a check, because this is also the heartbeat:
+            # `last_wake_at` is the only evidence the panel is alive, and on a
+            # multi-day draw cycle the fetch timestamp cannot be that evidence.
+            store.last_wake_at = time.time()
             cfg = store.source.settings
+            with store.lock:
+                pending = (store.current != 0
+                           and store.fetched_generation != store.current)
+            first_ever = store.current == 0
+            scheduled = store.scheduled_refresh_due()
+
+            # A photo somebody ASKED for outranks the schedule and is never
+            # rotated past: it is delivered before a new one is made, which is
+            # the whole reason /wake and /next are different endpoints.
+            draw = pending or scheduled or first_ever
+            if draw and not pending:
+                generation = store.rotate()
+                LOG.info("wake: drawing gen %d (%s)", generation,
+                         "scheduled refresh" if scheduled else "first frame")
+            elif pending:
+                generation = store.current
+                LOG.info("wake: gen %d was asked for and not yet collected, "
+                         "serving it", generation)
+            else:
+                # NOTHING TO DO, AND THAT IS THE COMMON CASE. Do not rotate:
+                # rendering a photo nobody will collect burns a generation and
+                # makes `on_panel` read false until the next draw, which is
+                # exactly the "a newer photo is waiting" signal that would then
+                # be lying.
+                generation = store.current
+                LOG.info("wake: nothing new, next scheduled draw in %s",
+                         store.next_refresh_description())
             self._json(200, {"generation": generation, "bytes": FRAME_BYTES,
+                             "draw": draw,
                              "sleep_seconds": int(float(cfg["sleep_hours"]) * 3600),
                              "ota_window_seconds": int(cfg["ota_window_seconds"])})
             return
@@ -803,6 +934,10 @@ class Handler(BaseHTTPRequestHandler):
                              "on_panel": on_panel,
                              "panel_fetched_generation": store.fetched_generation,
                              "panel_fetched_at": store.fetched_at,
+                             # The heartbeat, not the draw. See last_wake_at.
+                             "last_wake_at": store.last_wake_at,
+                             "scheduled_refresh_due": store.next_refresh_description(),
+                             "next_refresh_at": store.next_refresh_at(),
                              "on_panel_photo": store.meta.get(store.fetched_generation, {}),
                              "recent_count": len(store.recent),
                              "settings": store.source.settings,
@@ -890,9 +1025,16 @@ def main() -> None:
     threading.Thread(target=heartbeat, daemon=True).start()
 
     def recount_people() -> None:
+        wait = PEOPLE_RETRY_FIRST_SECONDS
         while True:
-            store.count_people()
-            time.sleep(PEOPLE_RECOUNT_SECONDS)
+            if store.count_people():
+                wait = PEOPLE_RETRY_FIRST_SECONDS
+                time.sleep(PEOPLE_RECOUNT_SECONDS)
+            else:
+                # Back off, but never past the point where the next ordinary
+                # daily count would have come round anyway.
+                time.sleep(min(wait, PEOPLE_RECOUNT_SECONDS))
+                wait = min(wait * 2, PEOPLE_RETRY_MAX_SECONDS)
 
     threading.Thread(target=recount_people, daemon=True).start()
 

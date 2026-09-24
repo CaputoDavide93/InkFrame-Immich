@@ -25,6 +25,8 @@ async def async_setup_entry(
         PhotoSensor(c),
         BusynessSensor(c),
         LastPanelFetchSensor(c),
+        LastCheckInSensor(c),
+        NextPhotoSensor(c),
         RejectedSensor(c),
         LastErrorSensor(c),
     ])
@@ -79,7 +81,12 @@ class BusynessSensor(InkFrameEntity, SensorEntity):
 
 
 class LastPanelFetchSensor(InkFrameEntity, SensorEntity):
-    """When the panel itself last collected a frame -- its last wake."""
+    """When the panel last COLLECTED a frame -- its last draw, not its last wake.
+
+    Since the check/draw split the panel wakes every `Sleep interval` hours
+    but collects only when a new photo is due, so this is days old on a
+    healthy frame. For "is it alive" read Last check-in.
+    """
 
     _attr_name = "Last panel fetch"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
@@ -97,6 +104,45 @@ class LastPanelFetchSensor(InkFrameEntity, SensorEntity):
         data = self.coordinator.data or {}
         return {"panel_generation": data.get("panel_fetched_generation"),
                 "rendered_generation": data.get("generation")}
+
+
+class LastCheckInSensor(InkFrameEntity, SensorEntity):
+    """When the panel last woke and asked for a photo -- its heartbeat.
+
+    Every wake counts, including the seven-second checks that draw nothing.
+    This is the clock "Next wake" is measured from.
+    """
+
+    _attr_name = "Last check-in"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:heart-pulse"
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "last_check_in")
+
+    @property
+    def native_value(self) -> datetime | None:
+        return _ts((self.coordinator.data or {}).get("last_wake_at"))
+
+
+class NextPhotoSensor(InkFrameEntity, SensorEntity):
+    """When the next new photo is due on the panel.
+
+    The first check at or after `Photo hour` on the day `Photo every` days
+    after the last collection. A due time in the past means the next check
+    will draw.
+    """
+
+    _attr_name = "Next photo"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "next_photo_due")
+
+    @property
+    def native_value(self) -> datetime | None:
+        return _ts((self.coordinator.data or {}).get("next_refresh_at"))
 
 
 class RejectedSensor(InkFrameEntity, SensorEntity):

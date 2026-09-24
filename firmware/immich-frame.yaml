@@ -31,14 +31,33 @@ substitutions:
   # server on every /wake, so both are Home Assistant settings and changing
   # them needs no reflash. These values are used when /wake cannot be reached,
   # in which case the panel keeps last week's photo and tries again after this.
-  sleep_for: 168h
-  sleep_fallback_s: "604800"
+  # THE BACKSTOP'S SLEEP, and it is deliberately SHORT.
+  #
+  # `deep_sleep:` takes a static duration, so the automatic expiry cannot use
+  # the server's `sleep_seconds`. It used to be 168h, which meant every path
+  # except the happy one slept for a WEEK: stay_awake left on, a fetch that
+  # kept failing, or simply a slow wake. Measured 2026-09-21 -- the panel last
+  # drew on 17 September with the interval set to 72h, and was not going to
+  # wake until the 24th.
+  #
+  # An hour is the right answer for a path that has already gone wrong. One
+  # extra wake costs a few seconds of radio; a silent week costs the whole
+  # feature, and looks exactly like success because e-paper holds its image.
+  sleep_for: 1h
+  # Same reasoning for a /wake that could not be reached: come back in an
+  # hour and ask again, rather than guessing at a week.
+  sleep_fallback_s: "3600"
   # Backstop only. The normal path sleeps as soon as the photo is on the glass
   # and the OTA window below has passed, which is about 30s. This value exists
   # for the failure path -- a fetch that errors, retries and errors again --
   # so that a node which never finishes its work still sleeps instead of
   # sitting awake flattening the battery.
-  awake_for: 120s
+  # 300s, not 120s. This is the AUTOMATIC backstop and it is a race the
+  # normal path must always win: wifi + /wake + download + a 7.5" full
+  # refresh (~20s) + the OTA hold is comfortably under a minute on a good
+  # wake, but a slow fetch and a retry used to cross 120s -- and losing that
+  # race costs a week, because the backstop cannot read `sleep_seconds`.
+  awake_for: 300s
   # Fallback OTA window, see above. Normally the server's value is used.
   ota_window: 20s
   ota_window_fallback_s: "20"
@@ -49,6 +68,31 @@ esphome:
   # No on_boot fetch: a fixed delay long enough to be safe is mostly dead
   # waiting, and the only thing the fetch needs is an IP. wifi.on_connect
   # fires the moment there is one, which removed about 12s from every wake.
+  #
+  # RE-ARM THE SLEEP BLOCK FOR A RESTORED `stay_awake`.
+  # `deep_sleep.prevent` is called from the switch's turn_on_action, which
+  # runs when somebody presses the switch -- not when its state is restored
+  # from flash on the next boot. So a node that booted with Stay awake ON
+  # skipped the explicit `deep_sleep.enter` (the `if` below sends it to the
+  # "not sleeping" branch) and was then put to sleep anyway by the automatic
+  # run_duration expiry, for the STATIC duration. Stay awake did not keep it
+  # awake; it made it sleep longer, and silently.
+  #
+  # That is what happened here: the panel drew on 17 September with Stay
+  # awake on, and nothing woke it for the rest of the week.
+  on_boot:
+    # -100, not the 600 default: higher priority runs EARLIER in ESPHome, and
+    # at 600 the switch has not restored from flash yet, so `switch.is_on`
+    # would read the initial value rather than the stored one and the guard
+    # would do nothing. -100 runs after every component is set up.
+    priority: -100
+    then:
+      - if:
+          condition:
+            switch.is_on: stay_awake
+          then:
+            - logger.log: "Stay awake restored on - blocking the sleep backstop"
+            - deep_sleep.prevent: sleeper
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -56,6 +100,17 @@ esp32:
     type: arduino
 
 globals:
+  - id: fetch_attempts
+    type: uint8_t
+    restore_value: false
+    initial_value: "0"
+  # Does the server want the glass changed this wake? Defaults TRUE so that a
+  # /wake we could not reach still draws: a frame that cannot ask should show
+  # something rather than nothing, and the old behaviour was to always draw.
+  - id: should_draw
+    type: bool
+    restore_value: false
+    initial_value: "true"
   - id: fetched_this_wake
     type: bool
     restore_value: false
@@ -165,13 +220,35 @@ online_image:
       # right failure: e-paper holds its last image with no power, so a stale
       # photo is invisible as a fault. The log line is the only evidence.
       - logger.log:
-          format: "online_image: DOWNLOAD FAILED, retrying once"
+          format: "online_image: DOWNLOAD FAILED"
           level: ERROR
-      # One retry inside the wake window. Without it a single failed fetch
-      # costs a whole week: the panel keeps last week's photo, which looks
-      # exactly like success, and nothing tries again until the next wake.
-      - delay: 10s
-      - component.update: photo
+      # ONE retry, counted. This said "retrying once" and was not once: a
+      # failed `component.update` calls `on_error` again, so it looped every
+      # ten seconds until the run_duration backstop killed the node -- and
+      # the backstop then slept for the static duration, not the server's.
+      # A brief renderer outage therefore cost a week.
+      #
+      # Counting it also makes the give-up path explicit: stop, and let the
+      # sleep below bring us back in an hour to try again.
+      - lambda: 'id(fetch_attempts) += 1;'
+      - if:
+          condition:
+            lambda: 'return id(fetch_attempts) < 2;'
+          then:
+            - logger.log: "online_image: retrying once"
+            - delay: 10s
+            - component.update: photo
+          else:
+            - logger.log:
+                format: "online_image: giving up this wake; sleeping short and retrying"
+                level: ERROR
+            - if:
+                condition:
+                  switch.is_off: stay_awake
+                then:
+                  - deep_sleep.enter:
+                      id: sleeper
+                      sleep_duration: !lambda 'return ${sleep_fallback_s} * 1000;'
 
 spi:
   clk_pin: GPIO8
@@ -201,13 +278,21 @@ display:
 script:
   - id: wake_script
     then:
+      # A held-awake node never reboots, so the counter has to be cleared
+      # here rather than relying on deep sleep to zero it.
+      - lambda: 'id(fetch_attempts) = 0;'
       # /wake, never /next: the server rotates only if the panel has already
       # collected the current frame, so a photo Home Assistant rendered and
       # nobody has seen yet is delivered before a new one is made. The reply
       # also carries the sleep interval and OTA window.
       - http_request.get:
           url: "${frame_server}/wake"
-          headers:
+          # `request_headers`, not `headers`: ESPHome renamed it and the old
+          # key is now a HARD config error, so the firmware could not be
+          # rebuilt at all on 2026.9.0. online_image above was already
+          # updated; this one was missed, and nothing noticed because
+          # esphome/** is in neither CI nor the deploy.
+          request_headers:
             Authorization: "Bearer ${frame_token}"
           capture_response: true
           max_response_buffer_size: 512
@@ -219,20 +304,55 @@ script:
                       id(sleep_seconds) = root["sleep_seconds"].as<uint32_t>();
                     if (root["ota_window_seconds"].is<uint32_t>())
                       id(ota_window_seconds) = root["ota_window_seconds"].as<uint32_t>();
+                    // Absent means an older renderer that always drew. Keep
+                    // the default rather than inventing a policy here: the
+                    // server owns this decision, and a firmware that guessed
+                    // would disagree with it silently.
+                    if (root["draw"].is<bool>())
+                      id(should_draw) = root["draw"].as<bool>();
                     return true;
                   });
-                  ESP_LOGI("wake", "server says: sleep %us, ota window %us",
+                  ESP_LOGI("wake", "server says: draw %s, sleep %us, ota window %us",
+                           id(should_draw) ? "YES" : "no",
                            id(sleep_seconds), id(ota_window_seconds));
           on_error:
             - logger.log:
                 format: "/wake unreachable; using fallback sleep and fetching current frame"
                 level: WARN
-      - component.update: photo
+      - if:
+          condition:
+            lambda: 'return id(should_draw);'
+          then:
+            # ~35s: fetch, refresh, hold the OTA window, then sleep.
+            - component.update: photo
+          else:
+            # ~7s, and this is the common case. No fetch, no e-paper refresh,
+            # and crucially no OTA window -- that delay lives inside
+            # on_download_finished, so skipping the download skips the hold
+            # too. Sleep immediately with the interval the server just gave.
+            #
+            # The picture on the glass is untouched, which is the point:
+            # e-paper needs no power to keep it.
+            - logger.log: "wake: nothing to draw, sleeping"
+            - if:
+                condition:
+                  switch.is_off: stay_awake
+                then:
+                  - deep_sleep.enter:
+                      id: sleeper
+                      sleep_duration: !lambda |-
+                        return (id(sleep_seconds) > 0 ? id(sleep_seconds) : ${sleep_fallback_s}) * 1000;
 
   # Home Assistant's "Next photo" is a server-side action; this button on the
   # panel itself only refetches whatever the server currently has.
   - id: next_photo_script
     then:
+      # A person pressing this means "change it now", which outranks the
+      # server's schedule. Without setting the flag the draw would happen but
+      # the node would then take the no-draw branch's immediate sleep on the
+      # next wake reasoning -- and more importantly a later fetch retry would
+      # read a stale false.
+      - lambda: 'id(should_draw) = true; id(fetch_attempts) = 0;'
       - component.update: photo
 
 sensor:

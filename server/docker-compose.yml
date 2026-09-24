@@ -5,6 +5,12 @@ services:
     image: ha-immich-frame:latest
     container_name: HA_ImmichFrame
     restart: always
+    depends_on:
+      # The renderer runs as uid 1000. A volume created by an earlier release,
+      # which ran as root, is root-owned; this one-shot fixes that in place
+      # before the renderer starts, keeping the saved source choice.
+      immich-frame-volume-init:
+        condition: service_completed_successfully
     ports:
       # Bind to one interface instead if the host has networks the panel should
       # not be reachable from: "${LISTEN_BIND:-0.0.0.0}:8099:8099" with LISTEN_BIND in .env.
@@ -29,6 +35,21 @@ services:
     secrets:
       - immich_frame_api_key
       - inkframe_token
+
+  immich-frame-volume-init:
+    # Runs once per `up`, as root with only CHOWN, and exits. Idempotent.
+    image: ha-immich-frame:latest
+    container_name: HA_ImmichFrameVolumeInit
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["chown -R 1000:1000 /data"]
+    restart: "no"
+    volumes:
+      - immich-frame-state:/data
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
 
 volumes:
   immich-frame-state:

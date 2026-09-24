@@ -38,6 +38,8 @@ Runtime settings, readable and writable through `/settings`, persisted in the st
 | `landscape_only` | bool | on / off | Skip portraits. Off means they are cropped to fit, with the window placed on the faces Immich found | ✅ |
 | `sleep_hours` | float | 1 to 336 | Delivered to the panel on `/wake` | ✅ |
 | `ota_window_seconds` | int | 5 to 300 | Delivered to the panel on `/wake` | ✅ |
+| `refresh_days` | int | 1 to 30 | How often the picture on the glass actually changes. Most wakes only CHECK (~7s); a draw is ~35s | ✅ |
+| `refresh_hour` | int | 0 to 23 | Local hour for the scheduled draw. The first check at or after it, never an exact alarm | ✅ |
 <!-- /AUTOGEN:settings -->
 
 ## Environment variables
@@ -68,6 +70,8 @@ Defaults for a fresh install. A value set through `/settings` is persisted and w
 | `LANDSCAPE_ONLY` | Default for `landscape_only`; `0` to crop portraits instead of skipping them | `1` |
 | `SLEEP_HOURS` | Default for `sleep_hours` | `168` |
 | `OTA_WINDOW_SECONDS` | Default for `ota_window_seconds` | `20` |
+| `REFRESH_DAYS` | Default for `refresh_days` | `3` |
+| `REFRESH_HOUR` | Default for `refresh_hour` | `7` |
 | `HEARTBEAT_FILE` | Touched every 30 s; for external liveness checks | `/tmp/immichframe-heartbeat` |
 | `LAST_OK_FILE` | Touched after every successful render | `/tmp/immichframe-render-ok` |
 | `LOG_LEVEL` | Python logging level | `INFO` |
