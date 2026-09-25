@@ -104,7 +104,7 @@ token file, add `inkframe_token` to ESPHome secrets, then use **Reconfigure**
 on the existing InkFrame integration to enter that token before deploying the
 protected renderer.
 
-Full walkthroughs: [Hardware](docs/hardware.md) · [Firmware](docs/firmware.md) · [Wake and sleep](docs/wake-and-sleep.md) · [Home Assistant](docs/home-assistant.md) · [Operations](docs/operations.md) · [Releasing](docs/releasing.md).
+Full walkthroughs: [Hardware](docs/hardware.md) · [Firmware](docs/firmware.md) · [Wake and sleep](docs/wake-and-sleep.md) · [Home Assistant](docs/home-assistant.md) · [Operations](docs/operations.md) · [Releasing](docs/releasing.md). Every doc: [docs/README.md](docs/README.md).
 
 ---
 
@@ -166,11 +166,12 @@ InkFrame-Immich/
 │   ├── ISSUE_TEMPLATE/         # 🐛 bug report, feature request
 │   └── dependabot.yml
 ├── brand/                      # 🎨 icon and logo, drawn by tools/gen_brand.py
-├── docs/                       # 📚 deep-dives, runbooks, the demo image
+├── docs/                       # 📚 deep-dives, runbooks, the demo image (index: docs/README.md)
+│   └── assets/                 # 🖼️ light/dark diagrams and the demo image
 ├── tools/
 │   ├── gen_docs.py             # 🤖 regenerates the inventory tables
-│   ├── gen_brand.py            #    regenerates brand/ and the demo
-│   └── export-public.sh        #    assembles this tree from the source monorepo
+│   ├── gen_diagram.py          #    draws the docs/assets diagrams
+│   └── gen_brand.py            #    regenerates brand/ and the demo
 ├── hacs.json                   # 🏠 HACS metadata
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
