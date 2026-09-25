@@ -117,4 +117,7 @@ class UpNextImage(_FrameImage):
         return {
             **super().extra_state_attributes,
             "waiting_for_the_panel": not bool(data.get("on_panel")),
+            # Held for the scheduled draw (see Next photo), not asked for:
+            # it goes up then, not at the next check.
+            "preview": bool(data.get("next_is_preview")),
         }

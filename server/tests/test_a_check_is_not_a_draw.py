@@ -108,7 +108,11 @@ class ACheckIsNotADraw(unittest.TestCase):
                       "fetch timestamp cannot show the panel is alive")
 
     def test_a_quiet_wake_does_not_rotate(self):
-        """The expensive mistake: burning a photo nobody will see."""
+        """The expensive mistake: burning a photo nobody will see.
+
+        Since 2026-09-24 a photo IS rendered between draws -- the held preview
+        -- but never on a check: it renders in the background after a
+        collection, and a check leaves it waiting (see the preview tests)."""
         source = (Path(__file__).resolve().parents[1]
                   / "src" / "app.py").read_text(encoding="utf-8")
         wake = source[source.index('if path == "/wake":'):]
@@ -118,6 +122,60 @@ class ACheckIsNotADraw(unittest.TestCase):
                       "rotates renders a photo nobody collects, and leaves "
                       "on_panel false until the next draw.")
 
+
+class TheNextPhotoIsAPreview(unittest.TestCase):
+    """After a collection the next photo is rendered and HELD for the draw.
+
+    Davide, 2026-09-24, twice: "cannot be the same current photo as next".
+    "Up next" repeated the photo on the wall until the next scheduled draw.
+    Now it previews the one that will go up -- and the preview must never go
+    up early, which is the difference between it and New photo now.
+    """
+
+    def _store(self, tmp):
+        import threading
+        store = app.FrameStore.__new__(app.FrameStore)
+        store.lock = threading.Lock()
+        store._render_lock = threading.RLock()
+        store.source = mock.Mock()
+        store.source.path = str(Path(tmp) / "source.json")
+        store.current, store.fetched_generation, store.preview = 2, 2, False
+        store.renders = []
+
+        def fake_rotate():
+            store.current += 1
+            store.renders.append(store.current)
+            return store.current
+        store._rotate = fake_rotate
+        return store
+
+    def test_a_preview_is_held_and_an_asked_photo_is_not(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            store.render_preview()
+            self.assertEqual(store.renders, [3])
+            self.assertTrue(store.preview, "the rendered photo is not marked as held")
+            # Something is waiting now, so a second preview is a no-op.
+            store.render_preview()
+            self.assertEqual(store.renders, [3])
+            # New photo now replaces the preview with an ASKED-FOR photo.
+            store.rotate()
+            self.assertFalse(store.preview, "an asked-for photo reads as a held preview")
+
+    def test_a_check_leaves_the_preview_but_the_draw_serves_it(self):
+        source = (Path(__file__).resolve().parents[1] / "src" / "app.py").read_text(encoding="utf-8")
+        wake = source[source.index('if path == "/wake":'):]
+        wake = wake[:wake.index('if path == "/status":')]
+        self.assertIn("asked = pending and not preview", wake)
+        self.assertIn("draw = asked or scheduled or first_ever", wake,
+                      "a held preview would go up at the next check")
+
+    def test_collecting_the_newest_renders_the_next_preview(self):
+        source = (Path(__file__).resolve().parents[1] / "src" / "app.py").read_text(encoding="utf-8")
+        fetch = source[source.index("def note_panel_fetch"):]
+        fetch = fetch[:fetch.index("def get(")]
+        self.assertIn("render_preview_soon()", fetch)
 
 if __name__ == "__main__":
     unittest.main()
@@ -144,3 +202,39 @@ def test_the_next_draw_is_a_timestamp_home_assistant_can_use(tmp_path):
     due = dt.datetime.fromtimestamp(store.next_refresh_at()).astimezone()
     assert (due.year, due.month, due.day, due.hour, due.minute) == (2026, 9, 25, 7, 0)
     assert store.next_refresh_description() == f"{due:%a %d %b %H:%M}"
+
+
+def test_the_heartbeat_survives_a_restart(tmp_path):
+    """A renderer restart used to blank Last check-in until the next wake.
+
+    Every deploy restarts the renderer, several a day, and the heartbeat was
+    kept only in memory -- so Home Assistant read "unknown" and the dashboard
+    "Next wake: —" for up to a whole sleep interval on a healthy frame
+    (2026-09-24). It is saved beside the frame state now.
+    """
+    import time
+    import app
+
+    def store_at(path):
+        store = app.FrameStore.__new__(app.FrameStore)
+        store.source = type("S", (), {"path": str(path / "source.json")})()
+        store.last_wake_at = 0.0
+        return store
+
+    first = store_at(tmp_path)
+    first.note_wake()
+    assert first.last_wake_at > 0
+
+    second = store_at(tmp_path)        # a fresh process, same volume
+    second._restore_heartbeat()
+    assert second.last_wake_at == first.last_wake_at
+
+    # A saved time in the future (a clock that jumped back) is refused.
+    (tmp_path / "heartbeat.json").write_text('{"last_wake_at": %f}' % (time.time() + 86400))
+    third = store_at(tmp_path); third._restore_heartbeat()
+    assert third.last_wake_at == 0.0
+
+    # A corrupt file costs the restored value, never the process.
+    (tmp_path / "heartbeat.json").write_text("not json")
+    fourth = store_at(tmp_path); fourth._restore_heartbeat()
+    assert fourth.last_wake_at == 0.0

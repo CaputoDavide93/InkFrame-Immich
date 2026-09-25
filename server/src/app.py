@@ -276,8 +276,17 @@ class FrameStore:
         self.fetched_generation = 0
         # The heartbeat. On a multi-day draw cycle the FETCH timestamp cannot
         # tell you the panel is alive -- three days without one is normal --
-        # so the check itself has to be the evidence. 0 means "has not called
-        # since this process started", which is honest rather than stale.
+        # so the check itself has to be the evidence. 0 means "the panel has
+        # never called".
+        #
+        # SAVED TO DISK since 2026-09-24. It used to live only in memory, on
+        # the grounds that 0 after a restart was "honest rather than stale".
+        # But a saved wake time is not stale: it records a real event and its
+        # AGE says how old it is. Keeping it in memory meant every renderer
+        # restart -- every deploy, several a day -- blanked Home Assistant's
+        # Last check-in and the dashboard's Next wake for up to a whole sleep
+        # interval, on a frame that was fine. The draw time was always
+        # persisted (the frame sidecar's `_fetched_at`); the heartbeat now is too.
         self.last_wake_at = 0.0
         self.fetched_at: float | None = None
         # name -> {"landscape": n, "eligible": bool}. Counting means paging
@@ -289,6 +298,16 @@ class FrameStore:
         self.people_ready = threading.Event()
         self._albums: list[str] = []
         self.lock = threading.Lock()
+        # NEXT IS A PREVIEW (2026-09-24). After the panel collects the newest
+        # photo, the next one is rendered straight away and HELD for the
+        # scheduled draw, so Home Assistant's "Up next" shows the photo that
+        # will actually go up on Sunday instead of repeating the one already
+        # on the wall. `preview` is what separates that held photo from one
+        # somebody ASKED for with New photo now: an asked-for photo goes up at
+        # the next check, a preview only at the scheduled draw. Renders are
+        # serialised so a preview can never overwrite an asked-for photo.
+        self.preview = False
+        self._render_lock = threading.RLock()
         self.generations: dict[int, bytes] = {}
         # Encoded once per generation, not once per request. The panel fetches
         # a frame a handful of times a week, but /preview.png and the Home
@@ -301,6 +320,7 @@ class FrameStore:
         self.last_error: str | None = None
         # Last, because it restores the state everything above declares.
         self._restore()
+        self._restore_heartbeat()
 
     # ── surviving a restart ───────────────────────────────────────────────
     # The state file has always held the source and the settings. It did not
@@ -345,6 +365,35 @@ class FrameStore:
             LOG.warning("could not read the %s frame's details: %s", slot, exc)
         return payload, meta
 
+    def _heartbeat_path(self) -> str:
+        return os.path.join(os.path.dirname(self.source.path) or "/data", "heartbeat.json")
+
+    def note_wake(self) -> None:
+        """Record a wake, in memory and on disk. A failed write costs only the
+        restart case, never the wake: /wake must answer the panel regardless."""
+        self.last_wake_at = time.time()
+        path = self._heartbeat_path()
+        try:
+            with open(path + ".tmp", "w") as handle:
+                json.dump({"last_wake_at": self.last_wake_at}, handle)
+            os.replace(path + ".tmp", path)
+        except OSError as exc:
+            LOG.warning("could not save the heartbeat: %s", exc)
+
+    def _restore_heartbeat(self) -> None:
+        try:
+            with open(self._heartbeat_path()) as handle:
+                value = float(json.load(handle).get("last_wake_at") or 0)
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            LOG.warning("could not restore the heartbeat: %s", exc)
+            return
+        # Never a time in the future: a clock that jumped back must not make
+        # the panel look like it checked in tomorrow.
+        if 0 < value <= time.time():
+            self.last_wake_at = value
+
     def _restore(self) -> None:
         """Rebuild both pictures. Generation numbering restarts, so the panel's
         frame takes 1 and the newest takes 2 when they differ -- `on_panel`
@@ -369,6 +418,9 @@ class FrameStore:
                 if not panel and meta.get("_was_on_panel"):
                     self.fetched_generation = 1
                     self.fetched_at = meta.get("_fetched_at")
+                # A held preview must stay held across a restart, or it would
+                # read as asked-for and go up at the next check.
+                self.preview = bool(meta.get("_preview")) and generation != self.fetched_generation
             if panel or latest:
                 LOG.info("restored: on the panel %r, up next %r",
                          (panel[1].get("name") if panel else None),
@@ -502,7 +554,30 @@ class FrameStore:
             hour=hour, minute=0, second=0, microsecond=0)
         return f"{due:%a %d %b %H:%M}"
 
-    def rotate(self) -> int:
+    def rotate(self, preview: bool = False) -> int:
+        """Render the next photo; `preview` holds it for the scheduled draw.
+
+        Serialised: an asked-for render and a preview render never overlap,
+        so whichever finishes last is the one its flag describes.
+        """
+        with self._render_lock:
+            generation = self._rotate()
+            with self.lock:
+                if self.current == generation:
+                    self.preview = preview
+            meta_path = self._frame_path("frame") + ".json"
+            try:
+                with open(meta_path) as handle:
+                    saved = json.load(handle)
+                saved["_preview"] = preview
+                with open(meta_path + ".tmp", "w") as handle:
+                    json.dump(saved, handle)
+                os.replace(meta_path + ".tmp", meta_path)
+            except (OSError, ValueError) as exc:
+                LOG.warning("could not record the preview flag: %s", exc)
+            return generation
+
+    def _rotate(self) -> int:
         """Render the next photo. Returns the new generation id.
 
         Downloads several candidates and picks the one that will survive one
@@ -726,6 +801,13 @@ class FrameStore:
         # actually on the wall.
         if payload is not None:
             self._persist(payload, saved, slot="panel")
+        # The panel now has the newest photo: render the next one and hold it.
+        with self.lock:
+            collected_newest = generation == self.current
+            if collected_newest:
+                self.preview = False
+        if collected_newest:
+            self.render_preview_soon()
 
     def get(self, generation: int | None) -> tuple[int, bytes]:
         """The frame for a generation, or the current one when asked for None.
@@ -751,6 +833,26 @@ class FrameStore:
             has_frame = self.current in self.generations
         if not has_frame:
             self.rotate()
+
+    def render_preview(self) -> None:
+        """Render the photo for the next scheduled draw, if none is waiting.
+
+        Only when the panel already has the newest photo: a waiting photo,
+        preview or asked-for, is never replaced by this. Runs in the
+        background so a collection never waits on Immich.
+        """
+        with self.lock:
+            nothing_waiting = self.current != 0 and self.fetched_generation == self.current
+        if not nothing_waiting:
+            return
+        try:
+            generation = self.rotate(preview=True)
+            LOG.info("preview: gen %d held for the next scheduled draw", generation)
+        except Exception as exc:  # noqa: BLE001 - a failed preview costs the preview only
+            LOG.warning("preview render failed: %s", exc)
+
+    def render_preview_soon(self) -> None:
+        threading.Thread(target=self.render_preview, daemon=True).start()
 
 
 def _touch(path: str) -> None:
@@ -887,26 +989,30 @@ class Handler(BaseHTTPRequestHandler):
             # It is served even on a check, because this is also the heartbeat:
             # `last_wake_at` is the only evidence the panel is alive, and on a
             # multi-day draw cycle the fetch timestamp cannot be that evidence.
-            store.last_wake_at = time.time()
+            store.note_wake()
             cfg = store.source.settings
             with store.lock:
                 pending = (store.current != 0
                            and store.fetched_generation != store.current)
+                preview = pending and store.preview
             first_ever = store.current == 0
             scheduled = store.scheduled_refresh_due()
+            asked = pending and not preview
 
             # A photo somebody ASKED for outranks the schedule and is never
             # rotated past: it is delivered before a new one is made, which is
-            # the whole reason /wake and /next are different endpoints.
-            draw = pending or scheduled or first_ever
+            # the whole reason /wake and /next are different endpoints. A
+            # PREVIEW is waiting too, but for the schedule: a check leaves it.
+            draw = asked or scheduled or first_ever
             if draw and not pending:
                 generation = store.rotate()
                 LOG.info("wake: drawing gen %d (%s)", generation,
                          "scheduled refresh" if scheduled else "first frame")
-            elif pending:
+            elif draw:
                 generation = store.current
-                LOG.info("wake: gen %d was asked for and not yet collected, "
-                         "serving it", generation)
+                LOG.info("wake: gen %d %s, serving it", generation,
+                         "was asked for and not yet collected" if asked
+                         else "is the held preview and the draw is due")
             else:
                 # NOTHING TO DO, AND THAT IS THE COMMON CASE. Do not rotate:
                 # rendering a photo nobody will collect burns a generation and
@@ -932,6 +1038,9 @@ class Handler(BaseHTTPRequestHandler):
                              # the panel never collected looks exactly like one
                              # hanging on the wall.
                              "on_panel": on_panel,
+                             # The waiting photo is held for the scheduled draw,
+                             # not asked for: it goes up at next_refresh_at.
+                             "next_is_preview": bool(store.preview and not on_panel),
                              "panel_fetched_generation": store.fetched_generation,
                              "panel_fetched_at": store.fetched_at,
                              # The heartbeat, not the draw. See last_wake_at.
@@ -1044,6 +1153,11 @@ def main() -> None:
     # rotates every time the container is rebuilt rather than every week.
     if store.current:
         LOG.info("start-up: keeping the restored frame, not rendering a new one")
+        # If the panel already has the newest photo, hold the next one now,
+        # so "Up next" is a preview from the first minute. A restart that
+        # restored a waiting photo (preview or asked-for) makes this a no-op,
+        # so deploys do not burn photos.
+        store.render_preview_soon()
     else:
         try:
             store.rotate()

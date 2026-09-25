@@ -6,6 +6,17 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-25
+
+### Changed
+- **Up next is a preview.** After the panel collects a photo, the renderer
+  renders the next one straight away and holds it for the scheduled draw, so
+  *Up next* shows the photo that will actually go up instead of repeating the
+  one on the panel. A held preview goes up only at the scheduled draw; a photo
+  asked for with *New photo now* still goes up at the next check. The
+  `Up next` image gains a `preview` attribute, and `/status` publishes
+  `next_is_preview`.
+
 ## [0.3.0] - 2026-09-24
 
 ### Added
