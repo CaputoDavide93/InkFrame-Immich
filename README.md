@@ -10,8 +10,8 @@
 ![ESPHome](https://img.shields.io/badge/ESPHome-2026.9-000000?logo=esphome&logoColor=white)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Integration-41BDF5?logo=homeassistant&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+[![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5)](https://hacs.xyz)
 ![License](https://img.shields.io/badge/License-MIT-green)
-[![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![Release](https://img.shields.io/github/v/release/CaputoDavide93/InkFrame-Immich)](https://github.com/CaputoDavide93/InkFrame-Immich/releases)
 [![CI](https://github.com/CaputoDavide93/InkFrame-Immich/actions/workflows/ci.yml/badge.svg)](https://github.com/CaputoDavide93/InkFrame-Immich/actions/workflows/ci.yml)
 
@@ -202,7 +202,7 @@ The two that catch everyone: a panel that is asleep looks identical to a dead on
 
 ## 🔒 Security
 
-The renderer holds an Immich API key and serves your photographs, unauthenticated, to anything on its network. Read [SECURITY.md](SECURITY.md) before exposing it beyond a trusted LAN.
+The renderer holds an Immich API key and serves your photographs. Every endpoint except the `/healthz` liveness probe requires the shared bearer token, but traffic is plain HTTP, so keep it on a trusted LAN. Read [SECURITY.md](SECURITY.md) before exposing it further.
 
 ---
 

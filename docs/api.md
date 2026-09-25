@@ -1,6 +1,6 @@
 # 🔌 Renderer API
 
-Plain HTTP, JSON in and out, no authentication. See [SECURITY.md](../SECURITY.md).
+Plain HTTP, JSON in and out. Every endpoint except `GET /healthz` requires `Authorization: Bearer <token>` (or an `X-InkFrame-Token` header); a token in the query string is not accepted. See [SECURITY.md](../SECURITY.md).
 
 ## Endpoints
 

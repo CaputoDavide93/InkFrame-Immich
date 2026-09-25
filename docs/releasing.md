@@ -23,9 +23,9 @@ it looks exactly like a broken feature.
    from there, and shows the update only when it differs from what is installed.
 3. `make ci` in the monorepo, then merge.
 4. **Export**: `tools/export-public.sh`. It refuses if a private identifier is
-   in the exported tree **or anywhere in the destination's git history** — see
-   [open-findings §19](../../../docs/04-operations/open-findings.md) for why the
-   second half exists.
+   in the exported tree **or anywhere in the destination's git history**. The
+   history check exists because a private identifier that once reached a public
+   commit stays readable there even after a later commit removes it.
 5. Commit and push in `integrations/InkFrame-Immich/` as Davide, no trailers.
    Wait for its CI: hassfest, renderer tests, HACS validation, ESPHome config.
    **That run is the verdict**, not `make ci`.
