@@ -40,6 +40,16 @@ Three things decide whether a photo looks good on a one-bit panel, and none of t
 
 ---
 
+## 📸 Screenshots
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/ha-device-dark.png">
+  <img src="docs/assets/screenshots/ha-device-light.png" width="100%" alt="The InkFrame device page in a live Home Assistant: album and source pickers, photo cadence and sleep controls, check-in and fetch sensors, and the render tuning sliders.">
+</picture>
+<sub>From a live install. The frame previews and the per-person filters are left out of the shot, because they show family photos and names.</sub>
+
+---
+
 ## 🗺️ Architecture
 
 <picture>
@@ -167,7 +177,7 @@ InkFrame-Immich/
 │   └── dependabot.yml
 ├── brand/                      # 🎨 icon and logo, drawn by tools/gen_brand.py
 ├── docs/                       # 📚 deep-dives, runbooks, the demo image (index: docs/README.md)
-│   └── assets/                 # 🖼️ light/dark diagrams and the demo image
+│   └── assets/                 # 🖼️ light/dark diagrams, the demo image and screenshots
 ├── tools/
 │   ├── gen_docs.py             # 🤖 regenerates the inventory tables
 │   ├── gen_diagram.py          #    draws the docs/assets diagrams
