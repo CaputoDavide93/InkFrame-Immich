@@ -7,7 +7,7 @@
 # -------------------------------
 # This chip has no PSRAM and about 200 KB of usable heap, of which the display
 # itself takes 48 KB. It cannot fetch a photo, decode it, scale it and dither
-# it. So services/ImmichFrame does all of that and serves a 1-bit image that is
+# it. So the renderer (InkFrame's server) does all of that and serves a 1-bit image that is
 # already exactly 800x480: the panel only decodes and draws. Free heap once the
 # second buffer is allocated is ~43 KB, which works but leaves no room -- the
 # "Heap free" and "Heap largest block" sensors exist so that a regression shows
@@ -104,13 +104,15 @@ globals:
     type: uint8_t
     restore_value: false
     initial_value: "0"
-  # Does the server want the glass changed this wake? Defaults TRUE so that a
-  # /wake we could not reach still draws: a frame that cannot ask should show
-  # something rather than nothing, and the old behaviour was to always draw.
+  - id: frame_generation
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  # A failed wake cannot select a generation to download or acknowledge.
   - id: should_draw
     type: bool
     restore_value: false
-    initial_value: "true"
+    initial_value: "false"
   - id: fetched_this_wake
     type: bool
     restore_value: false
@@ -195,6 +197,28 @@ online_image:
     on_download_finished:
       - logger.log: "online_image: download OK"
       - component.update: epaper
+      - if:
+          condition:
+            lambda: 'return id(frame_generation) > 0 && !id(epaper).is_failed() && !id(epaper).status_has_error() && !id(epaper).status_has_warning();'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  return std::string("${frame_server}/frame/ack?gen=") + std::to_string(id(frame_generation));
+                request_headers:
+                  Authorization: "Bearer ${frame_token}"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code != 200)
+                          ESP_LOGW("frame", "Display acknowledgement refused: %d", response->status_code);
+                on_error:
+                  - logger.log:
+                      format: "Display acknowledgement failed; server still considers the photo pending"
+                      level: WARN
+          else:
+            - logger.log:
+                format: "Display component failed or reported a fault; not acknowledging"
+                level: ERROR
       # The photo is on the glass; everything after this is the OTA window.
       #
       # This condition is load-bearing and was learned the hard way:
@@ -280,7 +304,7 @@ script:
     then:
       # A held-awake node never reboots, so the counter has to be cleared
       # here rather than relying on deep sleep to zero it.
-      - lambda: 'id(fetch_attempts) = 0;'
+      - lambda: 'id(fetch_attempts) = 0; id(frame_generation) = 0; id(should_draw) = false;'
       # /wake, never /next: the server rotates only if the panel has already
       # collected the current frame, so a photo Home Assistant rendered and
       # nobody has seen yet is delivered before a new one is made. The reply
@@ -299,15 +323,17 @@ script:
           on_response:
             then:
               - lambda: |-
+                  if (response->status_code != 200)
+                    return;
                   json::parse_json(body, [](JsonObject root) -> bool {
+                    if (!root["generation"].is<uint32_t>() || root["generation"].as<uint32_t>() == 0)
+                      return false;
+                    id(frame_generation) = root["generation"].as<uint32_t>();
                     if (root["sleep_seconds"].is<uint32_t>())
                       id(sleep_seconds) = root["sleep_seconds"].as<uint32_t>();
                     if (root["ota_window_seconds"].is<uint32_t>())
                       id(ota_window_seconds) = root["ota_window_seconds"].as<uint32_t>();
-                    // Absent means an older renderer that always drew. Keep
-                    // the default rather than inventing a policy here: the
-                    // server owns this decision, and a firmware that guessed
-                    // would disagree with it silently.
+                    id(should_draw) = true;
                     if (root["draw"].is<bool>())
                       id(should_draw) = root["draw"].as<bool>();
                     return true;
@@ -317,11 +343,20 @@ script:
                            id(sleep_seconds), id(ota_window_seconds));
           on_error:
             - logger.log:
-                format: "/wake unreachable; using fallback sleep and fetching current frame"
+                format: "/wake unreachable; keeping the current photo and using fallback sleep"
                 level: WARN
       - if:
           condition:
-            lambda: 'return id(should_draw);'
+            lambda: 'return id(frame_generation) > 0;'
+          then:
+            - online_image.set_url:
+                id: photo
+                url: !lambda |-
+                  return std::string("${frame_server}/frame.bmp?gen=") + std::to_string(id(frame_generation));
+                update: false
+      - if:
+          condition:
+            lambda: 'return id(should_draw) && id(frame_generation) > 0;'
           then:
             # ~35s: fetch, refresh, hold the OTA window, then sleep.
             - component.update: photo
@@ -344,7 +379,7 @@ script:
                         return (id(sleep_seconds) > 0 ? id(sleep_seconds) : ${sleep_fallback_s}) * 1000;
 
   # Home Assistant's "Next photo" is a server-side action; this button on the
-  # panel itself only refetches whatever the server currently has.
+  # panel itself only refetches the generation selected for this wake.
   - id: next_photo_script
     then:
       # A person pressing this means "change it now", which outranks the
@@ -352,8 +387,12 @@ script:
       # the node would then take the no-draw branch's immediate sleep on the
       # next wake reasoning -- and more importantly a later fetch retry would
       # read a stale false.
-      - lambda: 'id(should_draw) = true; id(fetch_attempts) = 0;'
-      - component.update: photo
+      - if:
+          condition:
+            lambda: 'return id(frame_generation) > 0;'
+          then:
+            - lambda: 'id(should_draw) = true; id(fetch_attempts) = 0;'
+            - component.update: photo
 
 sensor:
   - platform: debug

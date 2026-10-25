@@ -9,8 +9,15 @@ RUN useradd -m -u 1000 inkframe
 # Pillow needs no build toolchain for the wheels we pin, so this stays small.
 WORKDIR /app
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# requirements.txt is the human-edited list; requirements.lock is the exact,
+# hashed set the image installs. `--no-deps` forbids resolver drift,
+# `--require-hashes` makes a replaced or tampered upload fail this build, and
+# `pip check` proves the lock is complete. The base image's own pip does the
+# install: upgrading pip first would be the one download in this build that no
+# hash verifies.
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements.lock \
+    && pip check
 
 # Every file the service imports must be listed here. This repository has
 # shipped a service four times with an import that existed in the tree and not

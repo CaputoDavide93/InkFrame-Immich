@@ -232,7 +232,8 @@ class Immich:
         return rows if isinstance(rows, list) else []
 
     def by_search(self, query: str, landscape_only: bool = True,
-                  require_camera: bool = True, want: int = 120) -> list[dict]:
+                  require_camera: bool = True, want: int = 120,
+                  max_pages: int = 8) -> list[dict]:
         """Photographs matching a description, through Immich's CLIP search.
 
         This is the only way to put the cat on the frame: Immich clusters human
@@ -243,10 +244,15 @@ class Immich:
         best `want` matches. Taking everything would let a loose query pull in
         the whole library at the tail end of the ranking, which is how a smart
         search quietly becomes Random.
+
+        `max_pages` bounds the walk like every sibling here. CLIP ranks the
+        whole library, so `nextPage` is always there: a query whose matches
+        are mostly portraits or scans never reaches `want`, and without a cap
+        the loop read every page of the library on each refresh.
         """
         out: list[dict] = []
         page: int | str | None = 1
-        while page and len(out) < want:
+        while page and int(page) <= max_pages and len(out) < want:
             body = {"query": query, "size": 100, "page": int(page),
                     "withExif": True}
             assets = self._call("/api/search/smart", body).get("assets", {})

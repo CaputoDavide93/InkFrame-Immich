@@ -5,6 +5,9 @@ services:
     image: ha-immich-frame:latest
     container_name: HA_ImmichFrame
     restart: always
+    # No process in the container may gain privileges through exec: it runs
+    # as uid 1000 and execs python only.
+    security_opt: [no-new-privileges:true]
     depends_on:
       # The renderer runs as uid 1000. A volume created by an earlier release,
       # which ran as root, is root-owned; this one-shot fixes that in place
@@ -26,6 +29,26 @@ services:
       RENDER_CONTRAST: ${RENDER_CONTRAST:-1.05}
       CANDIDATES: ${CANDIDATES:-20}
       MAX_BUSYNESS: ${MAX_BUSYNESS:-22}
+      RECENT_MEMORY: ${RECENT_MEMORY:-120}
+      # Every other setting .env.example lists, each at the renderer's own
+      # default. Compose passes a .env key into the container only when it is
+      # named here, so a setting missing from this list is ignored silently.
+      MIN_PERSON_PHOTOS: ${MIN_PERSON_PHOTOS:-20}
+      PEOPLE_RECOUNT_SECONDS: ${PEOPLE_RECOUNT_SECONDS:-86400}
+      REQUIRE_CAMERA: ${REQUIRE_CAMERA:-1}
+      LANDSCAPE_ONLY: ${LANDSCAPE_ONLY:-1}
+      SLEEP_HOURS: ${SLEEP_HOURS:-168}
+      OTA_WINDOW_SECONDS: ${OTA_WINDOW_SECONDS:-20}
+      REFRESH_DAYS: ${REFRESH_DAYS:-3}
+      REFRESH_HOUR: ${REFRESH_HOUR:-7}
+      HEARTBEAT_FILE: ${HEARTBEAT_FILE:-/tmp/immichframe-heartbeat}
+      LAST_OK_FILE: ${LAST_OK_FILE:-/tmp/immichframe-render-ok}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Fixed, not settable: the port mapping, the health check and the
+      # /data volume are built around them.
+      LISTEN_HOST: "0.0.0.0"
+      LISTEN_PORT: "8099"
+      STATE_FILE: /data/state.json
       TZ: Europe/London
     volumes:
       # The household's source choice must survive a restart: the panel sleeps

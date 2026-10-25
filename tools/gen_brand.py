@@ -6,6 +6,7 @@
   brand/logo.png       1024x256  wordmark
   brand/logo@2x.png    2048x512  hDPI wordmark, for home-assistant/brands
   docs/assets/demo.png           a synthetic scene beside its one-bit render
+  docs/assets/social-preview.png 1280x640, uploaded by hand in the repository settings
 
 The demo is deliberately synthetic. The real frames this was built on are
 family photographs, and a public repository is not the place for them; a
@@ -196,6 +197,46 @@ def demo() -> Image.Image:
     return out
 
 
+def social_preview() -> Image.Image:
+    """The 1280x640 card GitHub shows when the repository is shared.
+
+    Icon, name, the one-line promise and four chips on the left; the real
+    renderer's frame in a bezel on the right, so the card shows the product
+    and not a logo.
+    """
+    w, h = 1280, 640
+    img = Image.new("RGB", (w, h), PAPER)
+    d = ImageDraw.Draw(img)
+
+    left = 72
+    icon_img = icon(176)
+    d.rounded_rectangle([left - 14, 62, left + 176 + 14, 76 + 176 + 14], radius=36, fill=(228, 222, 210))
+    img.paste(icon_img, (left, 76), icon_img)
+    d.text((left, 290), "InkFrame", fill=INK, font=_font(92))
+    d.text((left, 392), "for Immich", fill=(90, 90, 90), font=_font(44))
+    d.text((left, 462), "One good photo a week on a battery", fill=INK, font=_font(30))
+    d.text((left, 502), "e-paper frame, run from Home Assistant", fill=INK, font=_font(30))
+
+    chips = ('7.5" e-paper', "Immich", "Home Assistant", "ESPHome")
+    chip_font = _font(20)
+    x, y = left, 568
+    for label in chips:
+        tw = d.textlength(label, font=chip_font)
+        d.rounded_rectangle([x, y, x + tw + 28, y + 38], radius=19, fill=(232, 226, 214))
+        d.text((x + 14, y + 7), label, fill=INK, font=chip_font)
+        x += tw + 28 + 10
+
+    # The bezel and the real render, drawn from the same scene as the demo.
+    frame = render(scene(PANEL_W, PANEL_H)).convert("RGB").resize((540, 324), Image.LANCZOS)
+    bx, by, pad = 668, 119, 26
+    d.rounded_rectangle([bx, by, bx + 540 + pad * 2, by + 324 + pad * 2 + 18], radius=22, fill=INK)
+    img.paste(frame, (bx + pad, by + pad))
+    dot = 8
+    cx, cy = bx + 540 + pad * 2 - 34, by + 324 + pad + 22
+    d.ellipse([cx - dot, cy - dot, cx + dot, cy + dot], fill=ACCENT)
+    return img
+
+
 def main() -> None:
     (ROOT / "brand").mkdir(exist_ok=True)
     (ROOT / "docs" / "assets").mkdir(parents=True, exist_ok=True)
@@ -206,8 +247,9 @@ def main() -> None:
     # hDPI logo, so 2048x512 rather than a doubling of an already-wide image.
     logo(2).save(ROOT / "brand" / "logo@2x.png")
     demo().save(ROOT / "docs" / "assets" / "demo.png", optimize=True)
+    social_preview().save(ROOT / "docs" / "assets" / "social-preview.png", optimize=True)
     print("brand/icon.png brand/icon@2x.png brand/logo.png brand/logo@2x.png "
-          "docs/assets/demo.png")
+          "docs/assets/demo.png docs/assets/social-preview.png")
 
 
 if __name__ == "__main__":

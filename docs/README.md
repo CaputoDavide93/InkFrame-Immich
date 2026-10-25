@@ -2,7 +2,10 @@
 
 | Doc | What it covers |
 |---|---|
-| [architecture.md](architecture.md) | The three parts — renderer, Home Assistant integration, panel — and how they talk |
+| [setup.md](setup.md) | A numbered walkthrough from an empty desk to a photo on the glass, with a screenshot per Home Assistant screen |
+| [faq.md](faq.md) | Short answers: waking the panel, battery, other panels, privacy, colour |
+| [how-it-works.md](how-it-works.md) | The whole system on one page: the three parts, one wake, how a photo is chosen |
+| [architecture.md](architecture.md) | The three parts (renderer, Home Assistant integration, panel) and how they talk |
 | [api.md](api.md) | The renderer's HTTP API and every environment variable |
 | [rendering.md](rendering.md) | Choosing a photograph and turning it into one-bit pixels |
 | [wake-and-sleep.md](wake-and-sleep.md) | How often the frame wakes, what that costs, and how to tell asleep from dead |
@@ -13,4 +16,8 @@
 | [releasing.md](releasing.md) | How the renderer, integration and firmware each ship |
 | [troubleshooting.md](troubleshooting.md) | Symptom-first fixes |
 
-Diagrams and the demo image live in [assets/](assets/); they are drawn by `tools/gen_diagram.py` and `tools/gen_brand.py`.
+Diagrams, the demo image and the social preview live in [assets/](assets/); they are drawn by `tools/gen_diagram.py` and `tools/gen_brand.py`. The screenshots are taken by `tools/screenshots/take_screenshots.py` (`make screenshots`).
+
+---
+
+<p align="center"><sub>Made with ❤️ by <a href="https://github.com/CaputoDavide93">Davide Caputo</a></sub></p>

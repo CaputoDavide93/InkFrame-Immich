@@ -40,6 +40,7 @@ class _Store:
         self.source = mock.Mock()
         self.source.settings = {"refresh_days": days, "refresh_hour": hour}
 
+    _refresh_due_at = app.FrameStore._refresh_due_at
     scheduled_refresh_due = app.FrameStore.scheduled_refresh_due
     next_refresh_description = app.FrameStore.next_refresh_description
 
@@ -107,6 +108,18 @@ class ACheckIsNotADraw(unittest.TestCase):
                       "the heartbeat is gone; on a multi-day draw cycle the "
                       "fetch timestamp cannot show the panel is alive")
 
+    def test_legacy_download_starts_the_draw_schedule(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            store = app.FrameStore(None, app.Source(str(Path(tmp) / "state.json")))
+            store.generations[1] = bytes(app.FRAME_BYTES)
+            store.meta[1] = {}
+            store.current = 1
+            store.render_preview_soon = mock.Mock()
+            store.note_download(1, 0, app.FRAME_BYTES)
+            self.assertEqual(store.fetched_generation, 1)
+            self.assertFalse(store.scheduled_refresh_due())
+
     def test_a_quiet_wake_does_not_rotate(self):
         """The expensive mistake: burning a photo nobody will see.
 
@@ -124,7 +137,7 @@ class ACheckIsNotADraw(unittest.TestCase):
 
 
 class TheNextPhotoIsAPreview(unittest.TestCase):
-    """After a collection the next photo is rendered and HELD for the draw.
+    """After a display ACK the next photo is rendered and HELD for the draw.
 
     Davide, 2026-09-24, twice: "cannot be the same current photo as next".
     "Up next" repeated the photo on the wall until the next scheduled draw.
@@ -159,9 +172,44 @@ class TheNextPhotoIsAPreview(unittest.TestCase):
             # Something is waiting now, so a second preview is a no-op.
             store.render_preview()
             self.assertEqual(store.renders, [3])
-            # New photo now replaces the preview with an ASKED-FOR photo.
+            # An asked-for render (`/next?now=1`) replaces the preview with a
+            # photo the next check delivers.
             store.rotate()
             self.assertFalse(store.preview, "an asked-for photo reads as a held preview")
+
+    def _next(self, store, query):
+        sent = []
+        handler = app.Handler.__new__(app.Handler)
+        handler.store = store
+        handler._json = lambda code, obj: sent.append((code, obj))
+        store.last_error = None
+        handler._route("/next", query)
+        return sent[0]
+
+    def test_change_next_photo_holds_it_for_the_schedule(self):
+        """Davide, 2026-09-25: "change the next photo that will be picked to
+        the next round". The button used to render an asked-for photo, which
+        the next check -- hours away, not days -- drew on the glass."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            code, body = self._next(store, {})
+            self.assertEqual(code, 200)
+            self.assertEqual(store.renders, [3])
+            self.assertTrue(store.preview, "a changed Next would go up at the next check")
+            self.assertTrue(body["held"])
+            # Pressed again: another photo, still held.
+            self._next(store, {})
+            self.assertEqual(store.renders, [3, 4])
+            self.assertTrue(store.preview)
+
+    def test_now_1_keeps_the_old_meaning(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            _code, body = self._next(store, {"now": ["1"]})
+            self.assertFalse(store.preview)
+            self.assertFalse(body["held"])
 
     def test_a_check_leaves_the_preview_but_the_draw_serves_it(self):
         source = (Path(__file__).resolve().parents[1] / "src" / "app.py").read_text(encoding="utf-8")
@@ -171,11 +219,27 @@ class TheNextPhotoIsAPreview(unittest.TestCase):
         self.assertIn("draw = asked or scheduled or first_ever", wake,
                       "a held preview would go up at the next check")
 
-    def test_collecting_the_newest_renders_the_next_preview(self):
-        source = (Path(__file__).resolve().parents[1] / "src" / "app.py").read_text(encoding="utf-8")
-        fetch = source[source.index("def note_panel_fetch"):]
-        fetch = fetch[:fetch.index("def get(")]
-        self.assertIn("render_preview_soon()", fetch)
+    def test_acknowledging_the_newest_renders_the_next_preview(self):
+        """Display acknowledgement advances the schedule and preview."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            store.generations = {2: bytes(app.FRAME_BYTES)}
+            store.meta = {2: {"asset_id": "displayed"}}
+            store.fetched_generation, store.fetched_at = 1, None
+            store.preview = True
+            store._persist = mock.Mock()
+            store.render_preview_soon = mock.Mock()
+            store.note_panel_fetch(2)
+            self.assertEqual(store.fetched_generation, 2)
+            self.assertIsNotNone(store.fetched_at)
+            self.assertFalse(store.preview)
+            store.render_preview_soon.assert_called_once_with()
+            store._persist.assert_called_once_with(
+                store.generations[2],
+                {"asset_id": "displayed", "_generation": 2, "_was_on_panel": True,
+                 "_fetched_at": store.fetched_at}, slot="panel",
+            )
 
 if __name__ == "__main__":
     unittest.main()

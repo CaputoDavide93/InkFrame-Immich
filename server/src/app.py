@@ -10,6 +10,7 @@ into the display with a few kilobytes of working memory.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import hmac
 import logging
@@ -66,6 +67,16 @@ PEOPLE_RECOUNT_SECONDS = int(os.environ.get("PEOPLE_RECOUNT_SECONDS", str(24 * 3
 # co-start in the first minute and a longer Immich outage without noise.
 PEOPLE_RETRY_FIRST_SECONDS = 30
 PEOPLE_RETRY_MAX_SECONDS = 15 * 60
+# AN OTA WINDOW THIS LONG MEANS SOMEBODY IS ABOUT TO FLASH (2026-10-22).
+# The firmware holds its OTA window only after a download (the delay lives in
+# `on_download_finished`), so a wake that only checks sleeps after ~7 seconds
+# whatever the window says. The default is 20 seconds; nothing sets a minute or
+# more except the "Prepare for update" button, which sets 300 and puts the old
+# value back after the next wake. So a window at or above this makes every wake
+# a drawing one, of the photo ALREADY on the glass when there is one: the
+# picture does not change, the schedule does not move, and the panel stays up
+# for the window.
+FLASH_WINDOW_SECONDS = 60
 HEARTBEAT = os.environ.get("HEARTBEAT_FILE", "/tmp/immichframe-heartbeat")
 LAST_OK = os.environ.get("LAST_OK_FILE", "/tmp/immichframe-render-ok")
 
@@ -181,15 +192,31 @@ class Source:
             LOG.warning("could not read %s, using defaults: %s", self.path, exc)
 
     def save(self) -> None:
+        """Write the source and settings ATOMICALLY (2026-10-22 review).
+
+        This wrote the live file in place, so a crash or a full volume
+        mid-write left half a JSON document, and `load` then fell back to
+        Random and the defaults: the household's choice gone without a word.
+        A temporary file beside it, flushed and fsynced, then renamed over
+        it, means the file on disk is always the old one or the new one.
+        """
+        tmp = f"{self.path}.tmp"
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path, "w") as handle:
+            with open(tmp, "w") as handle:
                 json.dump({"mode": self.mode, "person": self.person,
                            "people": self.people, "album": self.album,
                            "query": self.query, "days": self.days,
                            "settings": self.settings}, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, self.path)
         except OSError as exc:
             LOG.warning("could not persist source: %s", exc)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     @staticmethod
     def _coerce(key: str, raw: object):
@@ -259,7 +286,7 @@ class Source:
 
 
 class FrameStore:
-    """Holds the rendered frame, and the one before it.
+    """Holds current, previous, acknowledged, and one downloading frame.
 
     Keeping the previous generation matters: the panel fetches the frame in
     strips, and a rotation landing between strip 3 and strip 4 would otherwise
@@ -270,9 +297,10 @@ class FrameStore:
     def __init__(self, client: Immich, source: Source) -> None:
         self.client = client
         self.source = source
-        # What the PANEL has actually fetched, which is not the same as what
-        # has been rendered. E-paper holds its last image with no power, so a
-        # frame nobody collected looks identical to one on the wall.
+        # Explicit display acknowledgement once supported by the panel; legacy
+        # firmware acknowledges a complete download. Keep these field names stable.
+        self.ack_capable = False
+        self._download_ranges = {}
         self.fetched_generation = 0
         # The heartbeat. On a multi-day draw cycle the FETCH timestamp cannot
         # tell you the panel is alive -- three days without one is normal --
@@ -316,11 +344,15 @@ class FrameStore:
         self.encoded: dict[tuple[int, str], bytes] = {}
         self.meta: dict[int, dict] = {}
         self.current = 0
+        self.next_generation = 1
+        self.downloading_generation = 0
         self.recent: deque[str] = deque(maxlen=RECENT_MEMORY)
         self.last_error: str | None = None
         # Last, because it restores the state everything above declares.
         self._restore()
+        self._restore_protocol()
         self._restore_heartbeat()
+        self._restore_recent()
 
     # ── surviving a restart ───────────────────────────────────────────────
     # The state file has always held the source and the settings. It did not
@@ -330,16 +362,7 @@ class FrameStore:
     # is indefinitely, and the panel's next wake gets nothing at all.
 
     def _frame_path(self, slot: str = "frame") -> str:
-        """Two slots, because the newest frame and the one on the wall are
-        different pictures whenever a render has happened since the panel last
-        woke -- which on a three-day cycle is most of the time.
-
-        Saving only the newest lost the collected one on every restart, and
-        `On the panel` went blank until the panel's next wake, days away. It
-        said unknown rather than showing the wrong photo, which was the right
-        failure, but it is still a blank card describing a wall that has a
-        picture on it.
-        """
+        """Fixed latest, panel, and download slots; never a file per generation."""
         return os.path.join(os.path.dirname(self.source.path) or "/data", f"{slot}.bin")
 
     def _read_slot(self, slot: str) -> tuple[bytes, dict] | None:
@@ -363,7 +386,85 @@ class FrameStore:
             pass
         except Exception as exc:  # noqa: BLE001 - a bad sidecar loses the caption, not the picture
             LOG.warning("could not read the %s frame's details: %s", slot, exc)
+        if not isinstance(meta, dict):
+            meta = {}
+        if meta.get("_payload_sha256") and meta["_payload_sha256"] != hashlib.sha256(payload).hexdigest():
+            LOG.warning("saved %s frame does not match its details; ignoring", slot)
+            return None
         return payload, meta
+
+    def _recent_path(self) -> str:
+        return os.path.join(os.path.dirname(self.source.path) or "/data", "recent.json")
+
+    def _save_recent(self, ids: list[str]) -> None:
+        """Remember what has been shown, across restarts.
+
+        It lived only in memory, so every renderer restart -- every deploy,
+        several a day -- forgot it, and the photos just shown were eligible
+        again at once. With the album cycling properly that forgetting is
+        what would still bring repeats back (2026-09-25).
+        """
+        path = self._recent_path()
+        try:
+            with open(path + ".tmp", "w") as handle:
+                json.dump(ids, handle)
+            os.replace(path + ".tmp", path)
+        except OSError as exc:
+            LOG.warning("could not save the recently shown list: %s", exc)
+
+    def _restore_recent(self) -> None:
+        try:
+            with open(self._recent_path()) as handle:
+                ids = json.load(handle)
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as exc:
+            LOG.warning("could not restore the recently shown list: %s", exc)
+            return
+        if isinstance(ids, list):
+            self.recent.extend(str(i) for i in ids if isinstance(i, str))
+
+    def _restore_protocol(self) -> None:
+        try:
+            with open(os.path.join(os.path.dirname(self.source.path) or "/data", "panel-protocol.json")) as handle:
+                self.ack_capable = json.load(handle).get("ack_capable") is True
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, AttributeError) as exc:
+            LOG.warning("could not restore panel protocol: %s", exc)
+
+    def note_ack_capable(self) -> None:
+        """A valid ACK opts this renderer into explicit ACKs, across restarts.
+
+        Delete /data/panel-protocol.json to return to the legacy fallback
+        (for example after reflashing pre-ACK firmware).
+        """
+        with self.lock:
+            self.ack_capable = True
+            self._download_ranges = {}
+            path = os.path.join(os.path.dirname(self.source.path) or "/data", "panel-protocol.json")
+            with open(path + ".tmp", "w") as handle:
+                json.dump({"ack_capable": True}, handle)
+            os.replace(path + ".tmp", path)
+
+    def note_download(self, generation: int, offset: int, length: int) -> None:
+        """Legacy firmware acknowledges only a completely written framebuffer."""
+        with self.lock:
+            if getattr(self, "ack_capable", False) or generation <= self.fetched_generation:
+                return
+            # A single pending panel download is retained, like the disk slot.
+            ranges = getattr(self, "_download_ranges", {}).get(generation, [])
+            ranges = sorted(ranges + [(offset, offset + length)])
+            merged = []
+            for start, end in ranges:
+                if merged and start <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+                else:
+                    merged.append((start, end))
+            self._download_ranges = {generation: merged}
+            complete = merged == [(0, FRAME_BYTES)]
+        if complete:
+            self.note_panel_fetch(generation, legacy=True)
 
     def _heartbeat_path(self) -> str:
         return os.path.join(os.path.dirname(self.source.path) or "/data", "heartbeat.json")
@@ -395,41 +496,55 @@ class FrameStore:
             self.last_wake_at = value
 
     def _restore(self) -> None:
-        """Rebuild both pictures. Generation numbering restarts, so the panel's
-        frame takes 1 and the newest takes 2 when they differ -- `on_panel`
-        then reports false, which is the truth: a newer photo is waiting."""
+        """Restore stable identities, migrating unnumbered legacy snapshots."""
         try:
-            panel = self._read_slot("panel")
-            latest = self._read_slot("frame")
-            if panel:
-                payload, meta = panel
-                self.current = 1
-                self.generations[1] = payload
-                self.meta[1] = {k: v for k, v in meta.items() if not k.startswith("_")}
-                self.fetched_generation = 1
-                self.fetched_at = meta.get("_fetched_at")
-            if latest:
-                payload, meta = latest
-                same = bool(panel) and meta.get("asset_id") == panel[1].get("asset_id")
-                generation = 1 if (same or not panel) else 2
-                self.current = generation
+            slots = {slot: saved for slot in ("panel", "frame", "download")
+                     if (saved := self._read_slot(slot)) is not None}
+            self.next_generation = max(
+                [1] + [value for _, meta in slots.values()
+                       for value in (meta.get("_next_generation"),
+                                     (meta.get("_generation") + 1
+                                      if type(meta.get("_generation")) is int else None))
+                       if type(value) is int and value > 0])
+            self.downloading_generation = 0
+            for slot, (payload, meta) in slots.items():
+                generation = meta.get("_generation")
+                if type(generation) is not int or generation <= 0:
+                    same = (slot == "frame" and "panel" in slots
+                            and payload == slots["panel"][0]
+                            and meta.get("asset_id") == slots["panel"][1].get("asset_id"))
+                    generation = (self.fetched_generation if same else
+                                  max(self.next_generation, int(time.time())))
+                    self.next_generation = max(self.next_generation, generation + 1)
+                    meta = dict(meta, _generation=generation)
+                    self._persist(payload, meta, slot=slot)
+                if slot == "download" and generation <= self.fetched_generation:
+                    self._clear_download()
+                    continue
                 self.generations[generation] = payload
                 self.meta[generation] = {k: v for k, v in meta.items() if not k.startswith("_")}
-                if not panel and meta.get("_was_on_panel"):
-                    self.fetched_generation = 1
+                if slot == "panel" or (slot == "frame" and "panel" not in slots
+                                       and meta.get("_was_on_panel")):
+                    self.fetched_generation = generation
                     self.fetched_at = meta.get("_fetched_at")
-                # A held preview must stay held across a restart, or it would
-                # read as asked-for and go up at the next check.
-                self.preview = bool(meta.get("_preview")) and generation != self.fetched_generation
-            if panel or latest:
-                LOG.info("restored: on the panel %r, up next %r",
-                         (panel[1].get("name") if panel else None),
-                         (latest[1].get("name") if latest else None))
+                if slot == "frame":
+                    self.current = generation
+                    self.preview = bool(meta.get("_preview")) and generation != self.fetched_generation
+                elif slot == "panel" and "frame" not in slots:
+                    self.current = generation
+                elif slot == "download":
+                    self.downloading_generation = generation
         except Exception as exc:  # noqa: BLE001 - a bad file must not stop the frame
             LOG.warning("could not restore the saved frames: %s", exc)
 
-    def _persist(self, payload: bytes, meta: dict, slot: str = "frame") -> None:
+    def _persist(self, payload: bytes, meta: dict, slot: str = "frame") -> bool:
         try:
+            meta = dict(meta)
+            generation = meta.get("_generation", self.fetched_generation if slot == "panel" else self.current)
+            if generation:
+                meta["_generation"] = generation
+                meta["_next_generation"] = max(getattr(self, "next_generation", 1), generation + 1)
+                meta["_payload_sha256"] = hashlib.sha256(payload).hexdigest()
             path = self._frame_path(slot)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             # Write then replace, so a restart mid-write cannot leave a
@@ -440,8 +555,20 @@ class FrameStore:
             with open(path + ".json.tmp", "w") as handle:
                 json.dump(meta, handle)
             os.replace(path + ".json.tmp", path + ".json")
+            return True
         except OSError as exc:
             LOG.warning("could not persist the %s frame: %s", slot, exc)
+            return False
+
+    def _clear_download(self) -> None:
+        self.downloading_generation = 0
+        for suffix in ("", ".json"):
+            try:
+                os.remove(self._frame_path("download") + suffix)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                LOG.warning("could not remove the downloaded frame: %s", exc)
 
     def count_people(self) -> bool:
         """Recount eligible people. True if the count actually landed.
@@ -500,6 +627,26 @@ class FrameStore:
             self.people_ready.wait(timeout=90)
         with self.lock:
             return dict(self.people)
+    def _refresh_due_at(self) -> dt.datetime | None:
+        """The moment the next DRAW is due, in local time; None before the first.
+
+        THE ONE PLACE this is worked out (2026-10-22 review). It used to be
+        done three times, each on `fromtimestamp(...).astimezone()`, which
+        carries the FIXED offset of the last collection. Adding days kept that
+        offset across a clock change, so after 25 Oct 2026 "07:00" meant 06:00
+        GMT to Home Assistant while the panel drew at 07:00 GMT. Now the date
+        and hour are wall-clock (naive local) and the offset is the one true
+        on the due date.
+        """
+        if not self.fetched_at:
+            return None
+        cfg = self.source.settings
+        days = int(cfg.get("refresh_days", 3))
+        hour = int(cfg.get("refresh_hour", 7))
+        last = dt.datetime.fromtimestamp(self.fetched_at)  # naive local wall clock
+        due = dt.datetime.combine(last.date() + dt.timedelta(days=days), dt.time(hour))
+        return due.astimezone()  # the zone's offset ON that date
+
     def scheduled_refresh_due(self) -> bool:
         """Is this the first check at or after the refresh hour, on the day
         the picture is due to change?
@@ -508,50 +655,37 @@ class FrameStore:
         three days at 7am" against a clock that drifts (deep sleep is not
         precise, and the panel wakes on its own timer) has to mean "the first
         check on or after that morning", or the draw slides a little later
-        every cycle until it happens at night.
+        every cycle until it happens at night. A check on a LATER day still
+        waits for the hour, so a missed morning does not become a 3am draw.
         """
-        cfg = self.source.settings
-        days = int(cfg.get("refresh_days", 3))
-        hour = int(cfg.get("refresh_hour", 7))
+        hour = int(self.source.settings.get("refresh_hour", 7))
         now = dt.datetime.now().astimezone()
         if now.hour < hour:
             return False
-        if not self.fetched_at:
+        due = self._refresh_due_at()
+        if due is None:
             # Never collected anything. /wake's `first_ever` covers generation
             # 0; past that, draw rather than wait days to start the cycle.
             return True
-        last = dt.datetime.fromtimestamp(self.fetched_at).astimezone()
-        return (now.date() - last.date()).days >= days
+        return now >= due
 
     def next_refresh_at(self) -> float | None:
         """When the next DRAW is due, as a timestamp; None before the first one.
 
-        The same arithmetic as `next_refresh_description`, as a number Home
+        The same moment `scheduled_refresh_due` waits for, as a number Home
         Assistant can use. Until 2026-09-24 the only machine-readable times
         were the last collection and the last wake, and the dashboard derived
         "Next Wake" from the collection -- which since the check/draw split is
         one to three days old, so it read "Due Now" permanently.
         """
-        if not self.fetched_at:
-            return None
-        cfg = self.source.settings
-        days = int(cfg.get("refresh_days", 3))
-        hour = int(cfg.get("refresh_hour", 7))
-        last = dt.datetime.fromtimestamp(self.fetched_at).astimezone()
-        due = (last + dt.timedelta(days=days)).replace(
-            hour=hour, minute=0, second=0, microsecond=0)
-        return due.timestamp()
+        due = self._refresh_due_at()
+        return due.timestamp() if due else None
 
     def next_refresh_description(self) -> str:
         """For the log line on a check, so a quiet wake still says something."""
-        cfg = self.source.settings
-        days = int(cfg.get("refresh_days", 3))
-        hour = int(cfg.get("refresh_hour", 7))
-        if not self.fetched_at:
+        due = self._refresh_due_at()
+        if due is None:
             return "unknown (nothing collected yet)"
-        last = dt.datetime.fromtimestamp(self.fetched_at).astimezone()
-        due = (last + dt.timedelta(days=days)).replace(
-            hour=hour, minute=0, second=0, microsecond=0)
         return f"{due:%a %d %b %H:%M}"
 
     def rotate(self, preview: bool = False) -> int:
@@ -613,10 +747,21 @@ class FrameStore:
         if not scored:
             raise RuntimeError("no candidate preview could be downloaded")
 
+        # ANY ACCEPTABLE PHOTO, NOT ALWAYS THE CALMEST (2026-09-25).
+        # Max busyness is the quality gate; below it, every photo is good
+        # enough for the panel. This used to take the calmest candidate every
+        # time, and with twenty candidates scored from a 36-photo album that
+        # is more than half the album per draw -- so the same three or four
+        # calmest photos won again and again. Davide: "I added 39 photos but
+        # only 3/4 are displayed". Now the pick is random among the
+        # acceptable ones; the calmest is only the fallback when every
+        # candidate is too busy.
+        import random as _random
         scored.sort(key=lambda row: row[0])
-        busyness, chosen, img = scored[0]
+        acceptable = [row for row in scored if row[0] <= max_busyness]
+        busyness, chosen, img = _random.choice(acceptable) if acceptable else scored[0]
         rejected = sum(1 for row in scored if row[0] > max_busyness)
-        if busyness > max_busyness:
+        if not acceptable:
             LOG.warning("every candidate was busier than %.1f; showing the "
                         "calmest at %.1f", max_busyness, busyness)
 
@@ -642,9 +787,8 @@ class FrameStore:
         elapsed = time.monotonic() - started
 
         with self.lock:
-            generation = self.current + 1
-            self.generations[generation] = payload
-            self.meta[generation] = {
+            generation = max(self.current + 1, self.next_generation)
+            meta = {
                 "asset_id": asset.id,
                 "name": asset.name,
                 "taken": asset.taken,
@@ -658,24 +802,30 @@ class FrameStore:
                 "rendered_at": time.time(),
                 "render_seconds": round(elapsed, 2),
             }
+            saved = dict(meta, _generation=generation, _was_on_panel=False,
+                         _fetched_at=None)
+            if not self._persist(payload, saved):
+                raise OSError("could not save the rendered generation")
+            self.generations[generation] = payload
+            self.meta[generation] = meta
             # Keep the new frame, the one before it, and whatever the panel is
             # actually displaying. That last one is the point: press Next photo
             # three times before a wake and the panel is three generations
             # behind, so evicting by age alone would throw away the only copy
             # of the picture hanging on the wall.
-            keep = {generation, generation - 1, self.fetched_generation}
+            keep = {generation, generation - 1, self.fetched_generation,
+                    self.downloading_generation}
             for stale in [g for g in self.generations if g not in keep]:
                 self.generations.pop(stale, None)
                 self.meta.pop(stale, None)
             for key in [k for k in self.encoded if k[0] not in keep]:
                 self.encoded.pop(key, None)
             self.current = generation
+            self.next_generation = generation + 1
             self.recent.append(asset.id)
-            saved = dict(self.meta[generation])
-            saved["_was_on_panel"] = False      # brand new, nobody has it yet
-            saved["_fetched_at"] = None
-        self._persist(payload, saved)
-        LOG.info("gen %d: %s busyness %.1f (best of %d) in %.2fs",
+            recent_snapshot = list(self.recent)
+        self._save_recent(recent_snapshot)
+        LOG.info("gen %d: %s busyness %.1f (of %d scored) in %.2fs",
                  generation, asset.name, busyness, len(scored), elapsed)
         self.last_error = None
         _touch(LAST_OK)
@@ -789,27 +939,34 @@ class FrameStore:
             self.encoded[key] = body
         return body
 
-    def note_panel_fetch(self, generation: int) -> None:
+    def note_panel_fetch(self, generation: int, *, legacy: bool = False) -> None:
+        """Record display, with complete-download compatibility for old firmware."""
         with self.lock:
-            self.fetched_generation = generation
-            self.fetched_at = time.time()
-            payload = self.generations.get(generation)
+            if legacy and getattr(self, "ack_capable", False):
+                return
+            if generation < self.fetched_generation:
+                raise KeyError(generation)
+            payload = self.generations[generation]
+            if generation == self.fetched_generation:
+                return
+            fetched_at = time.time()
             saved = dict(self.meta.get(generation, {}))
+            saved["_generation"] = generation
             saved["_was_on_panel"] = True
-            saved["_fetched_at"] = self.fetched_at
-        # Its own slot, so a later render cannot overwrite the picture that is
-        # actually on the wall.
-        if payload is not None:
-            self._persist(payload, saved, slot="panel")
-        # The panel now has the newest photo: render the next one and hold it.
-        with self.lock:
+            saved["_fetched_at"] = fetched_at
+            if not self._persist(payload, saved, slot="panel"):
+                raise OSError("could not save the acknowledged generation")
+            self.fetched_generation = generation
+            self.fetched_at = fetched_at
+            if getattr(self, "downloading_generation", 0) <= generation:
+                self._clear_download()
             collected_newest = generation == self.current
             if collected_newest:
                 self.preview = False
         if collected_newest:
             self.render_preview_soon()
 
-    def get(self, generation: int | None) -> tuple[int, bytes]:
+    def get(self, generation: int | None, *, pin: bool = False) -> tuple[int, bytes]:
         """The frame for a generation, or the current one when asked for None.
 
         A generation that was asked for BY NUMBER and is no longer held raises.
@@ -826,6 +983,12 @@ class FrameStore:
                 generation = self.current
             if generation not in self.generations:
                 raise RuntimeError("no frame rendered yet")
+            if pin and generation > self.fetched_generation:
+                if generation != getattr(self, "downloading_generation", 0):
+                    saved = dict(self.meta[generation], _generation=generation)
+                    if not self._persist(self.generations[generation], saved, slot="download"):
+                        raise OSError("could not save the downloaded generation")
+                self.downloading_generation = generation
             return generation, self.generations[generation]
 
     def ensure(self) -> None:
@@ -841,15 +1004,17 @@ class FrameStore:
         preview or asked-for, is never replaced by this. Runs in the
         background so a collection never waits on Immich.
         """
-        with self.lock:
-            nothing_waiting = self.current != 0 and self.fetched_generation == self.current
-        if not nothing_waiting:
-            return
-        try:
-            generation = self.rotate(preview=True)
-            LOG.info("preview: gen %d held for the next scheduled draw", generation)
-        except Exception as exc:  # noqa: BLE001 - a failed preview costs the preview only
-            LOG.warning("preview render failed: %s", exc)
+        with self._render_lock:
+            with self.lock:
+                nothing_waiting = (self.current != 0
+                                   and self.fetched_generation == self.current)
+            if not nothing_waiting:
+                return
+            try:
+                generation = self.rotate(preview=True)
+                LOG.info("preview: gen %d held for the next scheduled draw", generation)
+            except Exception as exc:  # noqa: BLE001 - a failed preview costs the preview only
+                LOG.warning("preview render failed: %s", exc)
 
     def render_preview_soon(self) -> None:
         threading.Thread(target=self.render_preview, daemon=True).start()
@@ -884,6 +1049,18 @@ class Handler(BaseHTTPRequestHandler):
         import json
         self._send(code, json.dumps(obj).encode() + b"\n", "application/json")
 
+    def _legacy_ack(self, record) -> None:
+        """Count a completed panel download as the draw, for pre-ACK firmware.
+
+        Called only AFTER the 200 is written, so a failure here is logged and
+        never answered: a second response on the same socket corrupts it.
+        """
+        try:
+            record()
+        except (KeyError, OSError) as exc:
+            LOG.warning("legacy display acknowledgement not recorded: %s", exc)
+            self.store.last_error = f"{type(exc).__name__}: {exc}"
+
     def _authorised(self) -> bool:
         """Accept a bearer header, never a query token that logs in proxies."""
         supplied = self.headers.get("Authorization", "")
@@ -894,6 +1071,12 @@ class Handler(BaseHTTPRequestHandler):
         return bool(supplied) and hmac.compare_digest(supplied, self.token)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
+        self._handle_request("GET")
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib naming
+        self._handle_request("POST")
+
+    def _handle_request(self, method: str) -> None:
         url = urlparse(self.path)
         query = parse_qs(url.query, keep_blank_values=True)
         # Docker needs an unauthenticated liveness probe, but every endpoint
@@ -902,13 +1085,40 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "authorization required"})
             return
         try:
-            self._route(url.path, query)
+            if url.path == "/frame/ack":
+                if method != "POST":
+                    self._json(405, {"error": "display acknowledgement requires POST"})
+                    return
+                values = query.get("gen", [])
+                try:
+                    if (len(values) != 1 or not values[0].isascii()
+                            or not values[0].isdecimal()):
+                        raise ValueError("one positive generation is required")
+                    generation = int(values[0])
+                    if generation <= 0:
+                        raise ValueError("one positive generation is required")
+                except ValueError:
+                    self._json(400, {"error": "one positive generation is required"})
+                    return
+                try:
+                    self.store.note_panel_fetch(generation)
+                except KeyError:
+                    self._json(404, {"error": f"generation {generation} is no longer held"})
+                    return
+                # Opt in to strict ACKs only on a valid, recorded ACK: a stray
+                # or malformed POST must not switch off the legacy fallback
+                # the current firmware depends on.
+                try:
+                    self.store.note_ack_capable()
+                except OSError as exc:
+                    LOG.warning("could not persist the ACK opt-in: %s", exc)
+                self._json(200, {"generation": generation})
+            else:
+                self._route(url.path, query)
         except Exception as exc:  # noqa: BLE001 - any failure becomes a 500, never a crash
             LOG.exception("request failed: %s", self.path)
             self.store.last_error = f"{type(exc).__name__}: {exc}"
             self._json(500, {"error": str(exc)})
-
-    do_POST = do_GET
 
     def _route(self, path: str, query: dict) -> None:
         store = self.store
@@ -1004,6 +1214,23 @@ class Handler(BaseHTTPRequestHandler):
             # the whole reason /wake and /next are different endpoints. A
             # PREVIEW is waiting too, but for the schedule: a check leaves it.
             draw = asked or scheduled or first_ever
+            flashing = int(cfg["ota_window_seconds"]) >= FLASH_WINDOW_SECONDS
+            if flashing and not draw:
+                # Somebody is waiting to flash, and only a draw holds the OTA
+                # window. Redraw what the panel already shows, so nothing on
+                # the wall or in the schedule moves: the acknowledgement of a
+                # generation already acknowledged changes nothing.
+                with store.lock:
+                    shown = store.fetched_generation
+                    held = shown in store.generations
+                generation = shown if held else store.current
+                LOG.info("wake: OTA window %ss asked for; redrawing gen %d so the "
+                         "panel holds it", cfg["ota_window_seconds"], generation)
+                self._json(200, {"generation": generation, "bytes": FRAME_BYTES,
+                                 "draw": True,
+                                 "sleep_seconds": int(float(cfg["sleep_hours"]) * 3600),
+                                 "ota_window_seconds": int(cfg["ota_window_seconds"])})
+                return
             if draw and not pending:
                 generation = store.rotate()
                 LOG.info("wake: drawing gen %d (%s)", generation,
@@ -1060,23 +1287,36 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/next":
-            # Rotate, then tell the panel which generation to fetch and how
-            # many bytes it is. The panel needs no knowledge of the photo.
-            generation = store.rotate()
+            # CHANGE THE NEXT PHOTO, NOT THE PHOTO NOW (2026-09-25).
+            #
+            # By default this renders a different photo and HOLDS it for the
+            # scheduled draw, exactly like the preview made after each draw:
+            # the frame still changes on its schedule, with this photo instead.
+            # It used to render an ASKED-FOR photo, which the next check (within
+            # hours) delivers -- a redraw nobody meant, from a button pressed to
+            # see what else the album had.
+            #
+            # `?now=1` keeps the old meaning for anyone who wants it: the next
+            # check draws it.
+            now = query.get("now", ["0"])[0] in ("1", "true", "yes")
+            generation = store.rotate(preview=not now)
             store.last_error = None
+            LOG.info("next: gen %d %s", generation,
+                     "asked for, the next check draws it" if now
+                     else "held for the next scheduled draw")
             self._json(200, {"generation": generation, "bytes": FRAME_BYTES,
-                             "width": 800, "height": 480})
+                             "width": 800, "height": 480,
+                             "held": not now})
             return
 
         if path == "/frame.bin":
             store.ensure()
             asked = query.get("gen", [None])[0]
             try:
-                generation, payload = store.get(int(asked) if asked else None)
+                generation, payload = store.get(int(asked) if asked else None, pin=True)
             except (KeyError, ValueError):
                 self._json(404, {"error": f"generation {asked} is no longer held"})
                 return
-            store.note_panel_fetch(generation)
             offset = int(query.get("offset", ["0"])[0])
             length = int(query.get("len", [str(FRAME_BYTES)])[0])
             if offset < 0 or offset > FRAME_BYTES:
@@ -1086,29 +1326,32 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, chunk, "application/octet-stream",
                        {"X-Frame-Generation": str(generation),
                         "X-Frame-Total": str(FRAME_BYTES)})
+            self._legacy_ack(lambda: store.note_download(generation, offset, len(chunk)))
             return
 
         if path in ("/frame.png", "/frame.bmp", "/preview.png"):
             store.ensure()
             asked = query.get("gen", [None])[0]
             try:
-                gen, _ = store.get(int(asked) if asked else None)
+                gen, _ = store.get(int(asked) if asked else None, pin=path != "/preview.png")
             except (KeyError, ValueError):
                 # A generation that has been evicted, or one that never
                 # existed. Saying so beats serving a different photo under the
                 # caller's label.
                 self._json(404, {"error": f"generation {asked} is no longer held"})
                 return
-            if path != "/preview.png":
-                # Only the panel fetches frame.*; /preview.png is for humans
-                # and must not claim the photo reached the glass.
-                store.note_panel_fetch(gen)
             fmt = "bmp" if path == "/frame.bmp" else "png"
             body = store.encode(gen, fmt)
             self._send(200, body,
                        "image/bmp" if fmt == "bmp" else "image/png",
                        {"Cache-Control": "no-store",
                         "X-Frame-Generation": str(gen)})
+            if path == "/frame.bmp":
+                # The firmware on the panel before the ACK firmware fetches
+                # exactly /frame.bmp and never POSTs /frame/ack. One complete
+                # body, so the finished write IS the complete download. Inert
+                # once any valid ACK has been recorded (note_panel_fetch).
+                self._legacy_ack(lambda: store.note_panel_fetch(gen, legacy=True))
             return
 
         self._json(404, {"error": "not found"})

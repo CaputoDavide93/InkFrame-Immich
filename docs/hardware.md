@@ -23,7 +23,7 @@ From the [Seeed ESPHome cookbook](https://wiki.seeedstudio.com/xiao_075inch_epap
 
 ## Battery
 
-Seeed rate the cell at about three months when refreshing every six hours in deep sleep. This project refreshes once a week and keeps the panel awake for about 35 seconds per wake, so the limit becomes the cell's self-discharge rather than the panel's draw. Expect many months; measure your own.
+Seeed rate the cell at about three months when refreshing every six hours in deep sleep. With the defaults (`sleep_hours` 168, `refresh_days` 3) the panel wakes once a week and draws on that wake, awake for about 35 seconds, so the limit becomes the cell's self-discharge rather than the panel's draw. Waking more often costs more: four checks a day with a draw every third day at `refresh_hour` is about 40 seconds awake a day (see [Wake and sleep](wake-and-sleep.md)). Expect many months at the default; measure your own.
 
 Battery voltage is not wired to the ESP32 on this panel. Reading it needs two resistors soldered on, which is why the firmware exposes no battery sensor. The wiki has the details for the related EE04 driver board.
 

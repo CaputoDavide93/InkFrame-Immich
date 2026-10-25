@@ -26,17 +26,19 @@ The panel sleeps for all but about 35 seconds a week. Home Assistant cannot push
 
 `/wake` does two things in one call.
 
-**It decides whether to rotate.** The renderer tracks which generation the panel last fetched. If the current frame has already been collected, `/wake` renders a new one. If Home Assistant rendered a frame yesterday and the panel has not seen it yet, `/wake` serves that frame instead of making another. Without this rule, pressing **Next photo** the day before a wake would be undone by the wake itself.
+**It decides whether to rotate.** The renderer tracks which generation the panel acknowledged after drawing. A downloaded frame is not yet a displayed frame. If Home Assistant rendered a frame yesterday and the panel has not displayed it yet, `/wake` serves that frame instead of making another. Without this rule, pressing **Next photo** the day before a wake would be undone by the wake itself.
 
 **It carries the wake parameters.** `sleep_seconds` and `ota_window_seconds` come back in the reply. The firmware uses them for this wake's OTA window and this sleep's duration. They started life as firmware substitutions; moving them to the server means changing them from Home Assistant needs no reflash. The firmware keeps its own values only as a fallback for a wake where `/wake` is unreachable.
 
 ## Generations
 
-Every render increments a generation counter. The renderer keeps the current generation and the one before it. A panel that started fetching generation 4 as generation 5 landed keeps reading 4, so a rotation can never paste the top of one photo onto the bottom of another. `/status` reports `generation`, `panel_fetched_generation` and `on_panel`, which is true only when they match.
+Every render increments a persisted generation counter. The renderer retains the current and previous renders, the acknowledged panel image, and the panel's in-flight download. Downloads and retries name the generation returned by `/wake`; a renderer restart does not rename it. A rotation cannot substitute a different photo midway through a download. `/status` retains the field names `generation`, `panel_fetched_generation` and `on_panel`, which is true only when the rendered and acknowledged generations match.
 
 ## Rendered is not displayed
 
-E-paper holds its last image with no power. A frame the panel never collected looks exactly like a frame hanging on the wall. The renderer records the moment the panel fetches `/frame.*`, and exposes it as `on_panel`; Home Assistant's `/preview.png` is deliberately a different path so opening the dashboard cannot mark a photo as displayed. Every entity in the integration describes the renderer except `On panel`, which describes the glass.
+E-paper holds its last image with no power. For acknowledging firmware, downloading `/frame.*` never changes the displayed state. After its display update returns without a reported component fault, the firmware sends an authenticated `POST /frame/ack?gen=N`. Only that acknowledgement records the displayed generation and starts the next draw interval; duplicate or stale acknowledgements cannot postpone it. Home Assistant uses `/preview.png` and never sends a display acknowledgement.
+
+The firmware's acknowledgement cannot verify physical pixels: a hardware fault that the display driver does not report can still escape detection. Firmware from before this protocol never acknowledges. Until the renderer has recorded one valid acknowledgement, a completed `/frame.bmp` or `/frame.bin` download stands in for it, so the renderer can be updated before the sleeping panel is reflashed. The first valid acknowledgement turns that fallback off for good (`/data/panel-protocol.json`).
 
 ## Memory budget on the panel
 

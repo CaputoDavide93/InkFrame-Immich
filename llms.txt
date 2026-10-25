@@ -1,0 +1,36 @@
+# InkFrame for Immich
+
+> InkFrame is a free, open-source (MIT) photo frame that shows one well-chosen photo a week from your own Immich library on a battery-powered 7.5-inch e-paper panel, the Seeed Studio XIAO 7.5" ePaper Panel. A small server (the renderer, a Docker container) picks a landscape photograph, crops it to 800x480, tones and dithers it to one bit, and serves the finished frame. The panel's firmware (ESPHome) wakes, fetches, draws and sleeps. A Home Assistant integration (HACS custom repository, domain `inkframe`) chooses where photos come from and shows what is on the glass and what is waiting.
+
+Key facts:
+
+- Tested hardware: Seeed Studio XIAO 7.5" ePaper Panel (ESP32-C3, UC8179 controller, 800x480, black and white). Other e-paper panels are unverified; colour and greyscale panels are not supported.
+- Why a server: the ESP32-C3 has no PSRAM and about 200 KB of heap, so it cannot fetch, decode, scale or dither a photograph. The server sends a finished one-bit frame of 48,000 bytes that the panel only copies to the display.
+- Photo choice: landscape by EXIF orientation (not by width and height), taken by a camera (EXIF make present), scored for texture (mean absolute Laplacian), and the calmest of twenty candidates is rendered. Portraits are cropped around the faces Immich found, or skipped if you prefer.
+- Sources, chosen from Home Assistant: random, recent (last N days), people (any of those ticked), one person, an album, or a text search such as "cat".
+- Power: the panel is awake about 35 seconds when it draws and about 7 seconds when it only checks. By default it wakes every 168 hours and draws on that wake when a draw is due (every 3 days, from 07:00 renderer-local time), so the photo changes about weekly. Both intervals are settings.
+- Waking: the panel cannot be woken from the network. A change made in Home Assistant reaches the glass at the panel's next wake. Pressing the reset button on the panel wakes it at once.
+- Rendered is not displayed: the `On panel` sensor turns true only after the panel sends an authenticated acknowledgement following a successful draw.
+- Privacy: the renderer reads your Immich server and talks to nothing else. Every endpoint except `/healthz` needs a shared bearer token. Traffic is plain HTTP, so keep it on a trusted network.
+- Requirements: an Immich server and API key (asset.read, asset.view, asset.statistics, album.read, person.read), a host with Docker for the renderer, Home Assistant 2025.1.0 or newer (declared minimum; exercised on 2026.9.4), ESPHome to flash the panel.
+- Install: run the renderer with `docker compose up -d` in `server/`, flash `firmware/immich-frame.yaml` with ESPHome, then add `https://github.com/CaputoDavide93/InkFrame-Immich` to HACS as a custom repository of type Integration and add the integration in Home Assistant.
+- Trade-off: the panel sleeps for days, so changes are not instant, and the renderer must run all the time next to Immich.
+- Independent project, not affiliated with or endorsed by Seeed Studio or Immich.
+
+## Docs
+
+- [README](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/README.md): what it is, comparison with other photo frames, install in three steps, supported hardware
+- [Setup](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/setup.md): the key and token, the renderer, the panel, the integration, the first photo
+- [FAQ](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/faq.md): waking the panel, battery life, other panels, privacy, colour
+- [Troubleshooting](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/troubleshooting.md): symptoms and fixes
+- [How it works](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/how-it-works.md): the three parts, one wake, how a photo is chosen
+
+## Optional
+
+- [Architecture](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/architecture.md): why the renderer exists and the wake protocol
+- [Renderer API](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/api.md): endpoints, settings and environment variables
+- [Rendering](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/rendering.md): filters, busyness score and the dither treatment
+- [Wake and sleep](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/wake-and-sleep.md): cadence, battery and the failure you cannot see
+- [Hardware](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/hardware.md): the panel, pinout and battery
+- [Firmware](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/docs/firmware.md): the ESPHome configuration and flashing
+- [Changelog](https://github.com/CaputoDavide93/InkFrame-Immich/blob/main/CHANGELOG.md)

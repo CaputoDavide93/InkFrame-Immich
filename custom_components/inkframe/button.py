@@ -1,4 +1,4 @@
-"""Render a new photo now, and re-read the album list."""
+"""Change the next photo, and re-read the album list."""
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
@@ -18,8 +18,9 @@ async def async_setup_entry(
 
 
 class NextPhotoButton(InkFrameEntity, ButtonEntity):
-    """Renders on the server immediately. The glass changes at the panel's
-    next wake, which may be days away -- watch `On panel`."""
+    """Picks a different next photo on the server. It is held for the
+    scheduled draw (`Up next` shows it), so the glass still changes on its
+    schedule -- see the renderer's `/next`."""
 
     _attr_name = "Next photo"
     _attr_icon = "mdi:image-refresh"

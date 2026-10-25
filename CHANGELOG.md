@@ -6,6 +6,41 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Security
+- **The container cannot gain privileges.** `docker-compose.yml` now starts
+  the renderer with `no-new-privileges`, as the volume-init one-shot already
+  was: it runs as uid 1000 and execs Python only, so no setuid binary in the
+  base image can ever raise what it runs as.
+- **Every download in the image build is hash-checked.** The build no longer
+  upgrades pip before installing the lock; that upgrade was the one download
+  no hash verified.
+- **CI runs with a read-only token and pinned actions.** The workflow declares
+  `permissions: contents: read` and runs every action at a full commit SHA.
+
+### Fixed
+- **Every setting in `.env` reaches the renderer.** `docker-compose.yml`
+  passed only some of the variables `.env.example` lists, so the rest (such as
+  `MIN_PERSON_PHOTOS`, `REQUIRE_CAMERA`, `SLEEP_HOURS`, `REFRESH_DAYS` and
+  `LOG_LEVEL`) were accepted and ignored. Each is now wired at the renderer's
+  own default. `LISTEN_HOST`, `LISTEN_PORT` and `STATE_FILE` are fixed in the
+  container, because the port mapping, health check and data volume depend
+  on them.
+
+### Changed
+- **A long OTA window holds on a check, too.** With `ota_window_seconds` at 60
+  or more, `/wake` answers `draw: true` with the generation already on the
+  glass, so a check redraws the same photo and the panel holds the window.
+  The firmware holds the window only after a download, so before this a
+  window set for a flash opened only on a drawing wake, up to days away.
+  Nothing on the wall, `on_panel` or the draw schedule changes. Set the window
+  back after the flash.
+- **Next photo changes the next photo, not the photo now.** `GET /next` now
+  renders a different photo and holds it for the scheduled draw, the same way
+  the preview after each draw is held. The frame keeps its schedule and shows
+  this photo instead. Before, it rendered an asked-for photo that the next
+  check, only hours away, put on the glass. `GET /next?now=1` keeps the old
+  behaviour. The reply gains `held`.
+
 ## [0.3.1] - 2026-09-25
 
 ### Changed

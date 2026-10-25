@@ -5,20 +5,21 @@ Plain HTTP, JSON in and out. Every endpoint except `GET /healthz` requires `Auth
 ## Endpoints
 
 <!-- AUTOGEN:endpoints -->
-| Path | Purpose |
+| Method and path | Purpose |
 |---|---|
-| `GET /healthz` | Unauthenticated liveness only; carries `generation` but no photo or state |
-| `GET /status` | Bearer-authenticated state: current photo, source, settings, people, `on_panel`, `last_error` |
-| `GET /wake` | **The panel's one call per wake.** Rotates only if the current frame was already collected; returns `sleep_seconds` and `ota_window_seconds` |
-| `GET /next` | Render a new photo now. Home Assistant's button. The panel never calls this |
-| `GET /frame.bmp` | The current frame as a 1-bit BMP. **Marks the frame as collected** |
-| `GET /frame.png` | The current frame as a 1-bit PNG. **Marks the frame as collected** |
-| `GET /frame.bin` | Raw 48,000-byte framebuffer, `?gen=&offset=&len=` for strip fetching. **Marks the frame as collected** |
-| `GET /preview.png` | The same frame for humans and for Home Assistant. Does **not** mark it as collected |
-| `GET /source` | Read or set where photos come from. Persisted |
-| `GET /settings` | Read or set runtime settings. Validated; persisted |
-| `GET /people` | Named faces with landscape counts and `eligible` |
-| `GET /albums` | Album names, read live. Also refreshes the cache `/status` serves |
+| `GET /healthz`, `POST /healthz` | Unauthenticated liveness only; carries `generation` but no photo or state |
+| `GET /status`, `POST /status` | Bearer-authenticated state: current photo, source, settings, people, `on_panel`, `last_error` |
+| `GET /wake`, `POST /wake` | The panel's wake check; returns `draw`, `generation`, `sleep_seconds` and `ota_window_seconds`. A pending frame is held until its scheduled draw unless requested with `/next?now=1`; an OTA window of 60 s or more makes a check redraw the photo already shown, so the window is held; complete BMP or raw downloads acknowledge legacy firmware until the first valid authenticated POST to `/frame/ack` |
+| `GET /next`, `POST /next` | Pick a different next photo and hold it for the scheduled draw; `?now=1` makes the next check draw it. Home Assistant's button. The panel never calls this |
+| `GET /frame.bmp`, `POST /frame.bmp` | The current or requested `?gen=N` frame as a 1-bit BMP, the format the panel draws. A completed download acknowledges legacy firmware until the first valid authenticated POST to `/frame/ack`, persisted across restarts; after that, downloading does not acknowledge display |
+| `GET /frame.png`, `POST /frame.png` | The current or requested `?gen=N` frame as a 1-bit PNG; downloading does not acknowledge display |
+| `GET /frame.bin`, `POST /frame.bin` | Raw 48,000-byte framebuffer, `?gen=&offset=&len=` for strip fetching; a complete download acknowledges legacy firmware until the first valid authenticated POST to `/frame/ack`, persisted across restarts |
+| `POST /frame/ack` | Authenticated display acknowledgement after a successful panel draw: requires one positive, held generation via `?gen=N`; idempotent for the already acknowledged generation. Invalid input returns 400; an unheld generation returns 404 |
+| `GET /preview.png`, `POST /preview.png` | The current or requested `?gen=N` frame for humans and Home Assistant; previewing does not acknowledge display |
+| `GET /source`, `POST /source` | Read or set where photos come from. Persisted |
+| `GET /settings`, `POST /settings` | Read or set runtime settings. Validated; persisted |
+| `GET /people`, `POST /people` | Named faces with landscape counts and `eligible` |
+| `GET /albums`, `POST /albums` | Album names, read live. Also refreshes the cache `/status` serves |
 <!-- /AUTOGEN:endpoints -->
 
 ## Settings
@@ -37,7 +38,7 @@ Runtime settings, readable and writable through `/settings`, persisted in the st
 | `require_camera` | bool | on / off | Only assets with a camera make in EXIF | ✅ |
 | `landscape_only` | bool | on / off | Skip portraits. Off means they are cropped to fit, with the window placed on the faces Immich found | ✅ |
 | `sleep_hours` | float | 1 to 336 | Delivered to the panel on `/wake` | ✅ |
-| `ota_window_seconds` | int | 5 to 300 | Delivered to the panel on `/wake` | ✅ |
+| `ota_window_seconds` | int | 5 to 300 | Delivered to the panel on `/wake`. At 60 or more every wake draws the photo already on the glass, because only a drawing wake holds the window; Home Assistant's Prepare for update sets 300 for one wake | ✅ |
 | `refresh_days` | int | 1 to 30 | How often the picture on the glass actually changes. Most wakes only CHECK (~7s); a draw is ~35s | ✅ |
 | `refresh_hour` | int | 0 to 23 | Local hour for the scheduled draw. The first check at or after it, never an exact alarm | ✅ |
 <!-- /AUTOGEN:settings -->

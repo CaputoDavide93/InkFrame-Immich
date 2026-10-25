@@ -10,16 +10,19 @@ off, it does not answer a ping, and nothing on the network can reach it. The
 server prepares the next photo and waits; the panel collects it when it next
 wakes, on its own timer.
 
-This is the same design TRMNL uses. There is no remote wake there either. What
-makes TRMNL *feel* instant is only the cadence, minutes rather than hours.
+Frames built this way have no remote wake. What makes one *feel* instant is
+only the cadence, minutes rather than hours.
 
 Two consequences worth internalising:
 
-- **"New photo now" on the frame page does not change the glass.** It renders
-  the next photo and queues it. The picture changes at the next wake.
-- **Pressing R on the back is the only instant path.** It reboots the node,
-  which wakes it, fetches and draws in about thirty seconds. Use it when you
-  want a photo on the wall *now*.
+- **"Change Next Photo" on the frame page does not change the glass.** It
+  picks a different next photo and holds it for the scheduled draw. The
+  picture changes on schedule, as it would have anyway.
+- **Pressing reset on the back is the only instant path.** It reboots the
+  node, which wakes it and calls `/wake`. A wake draws only when a draw is
+  due or a photo was asked for, so to put a photo up now, call
+  `/next?now=1` on the renderer first (see [Setup](setup.md#7-check-that-a-photo-reaches-the-glass)),
+  then press reset. The draw takes about thirty-five seconds.
 
 ## What a wake costs
 
@@ -38,6 +41,11 @@ refresh, then hold the OTA window before sleeping.
 A wake that only **checks** skips the fetch, the refresh *and* the OTA hold,
 because that hold lives inside `on_download_finished` and there is no
 download. That is roughly 7 seconds.
+
+The one exception is a flash. With the **OTA window** at 60 seconds or more the
+renderer answers every wake with `draw: true` and the generation already on the
+glass, so a check redraws the same photo and holds the window. Nothing on the
+wall or in the schedule moves. See [Firmware](firmware.md#flashing-over-the-air-step-by-step).
 
 So checking is about five times cheaper than drawing. The intuition that
 "not changing the photo saves nothing because waking is the cost" is wrong:
@@ -65,9 +73,9 @@ E-paper holds its last image with no power. A frame whose battery died in
 September shows the same photograph, at the same brightness, as one that woke
 ten minutes ago. Nothing about the wall tells you.
 
-It happened. The panel last collected on **2026-09-17 19:58** and was found on
-the **21st**, four days later, only because somebody pressed "new photo" and
-noticed nothing changed. Nothing in the house was watching.
+It happened on the author's frame: the panel stopped collecting for four days,
+and was found only because somebody pressed "new photo" and noticed nothing
+changed. Nothing was watching.
 
 The cause was a transient `/wake` failure. `sleep_seconds` stayed 0, so the
 firmware fell back to its static duration, which was **seven days**. The photo
@@ -87,23 +95,24 @@ Three fixes came out of it:
 
 ## Knowing it stopped
 
-`inkframe_panel_stopped_collecting` in `hub/HomeAssistant/automations/maintenance.yaml`
-WhatsApps when the panel has not collected for longer than one whole sleep
-interval plus two hours. Latched, so one outage is one message, with an
-all-clear when it returns.
+Build an automation that alerts you when either of two things is true: the
+panel has not **checked in** (`sensor.inkframe_last_check_in`) for three sleep
+intervals, or it has not **fetched** a photo (`sensor.inkframe_last_panel_fetch`)
+for longer than the draw interval plus a day of grace. The first catches a
+panel that stopped waking; the second catches one that wakes but cannot draw.
 
-It reads `sensor.inkframe_last_panel_fetch`'s **value**, never its
-`last_changed`. The value is a timestamp the renderer sets. `last_changed` is
-re-stamped on every Home Assistant restart, which happens on about 42% of
-pushes here, several times a day, so a `last_changed` check would report a
-four-day-dead frame as minutes old.
+Read each sensor's **value**, never its `last_changed`. Each value is a
+timestamp the renderer sets. `last_changed` is re-stamped whenever Home
+Assistant restarts, so a `last_changed` check would report a dead frame as
+minutes old.
 
-The threshold is read from `number.inkframe_sleep_interval`, so changing the
-cadence moves the alarm with it and the two cannot disagree.
+Take the check-in threshold from `number.inkframe_sleep_interval`, so changing
+the cadence moves the alarm with it and the two cannot disagree. The entity ids
+follow the device name you chose at setup.
 
 ## Stay awake
 
-`switch.entrance_immich_frame_stay_awake` blocks the sleep so you can flash or
+The panel's **Stay awake** switch blocks the sleep so you can flash or
 tune. It is stored in flash and survives deep sleep.
 
 Turn it **off** when you are done. On a battery frame with no battery sensor,
