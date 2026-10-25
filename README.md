@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/CaputoDavide93/InkFrame-Immich/main/brand/icon.png" alt="InkFrame icon: a small photo frame showing a one-bit landscape, with an orange charge dot" width="104" height="104">
+<img src="docs/assets/brand/icon.svg" alt="InkFrame icon: a green rounded tile with a white photo frame outline around a solid white picture" width="104" height="104">
 
 # 🖼️ InkFrame for Immich
 
@@ -269,11 +269,12 @@ InkFrame-Immich/
 │   └── dependabot.yml
 ├── brand/                      # 🎨 icon and logo, drawn by tools/gen_brand.py
 ├── docs/                       # 📚 guides, deep-dives, runbooks (index: docs/README.md)
-│   └── assets/                 # 🖼️ diagrams, screenshots, demo image, social preview
+│   └── assets/                 # 🖼️ diagrams, screenshots, demo image, brand tile, social preview
 ├── tools/
 │   ├── gen_docs.py             # 🤖 regenerates the inventory tables
 │   ├── gen_diagram.py          #    draws the docs/assets diagrams
 │   ├── gen_brand.py            #    regenerates brand/, the demo and the social preview
+│   ├── brand_kit.py            #    the icon tile and the social preview layout
 │   └── screenshots/            # 📸 make screenshots: stand-in Immich, real renderer, real Home Assistant
 ├── Makefile                    # 🔧 check, test, docs, diagram, brand, screenshots
 ├── llms.txt                    # 🤖 the project on one plain-text page
