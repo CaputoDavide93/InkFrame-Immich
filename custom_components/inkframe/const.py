@@ -1,6 +1,6 @@
 """Constants for the InkFrame integration.
 
-The integration talks to services/ImmichFrame, the renderer, never to the
+The integration talks to the renderer (the server in this repository), never to the
 panel: the panel is a battery ESP32-C3 in deep sleep for all but ~35 seconds a
 week. Everything set here takes effect at the panel's next wake, and
 `binary_sensor.*_on_panel` is the only entity that says whether it did.

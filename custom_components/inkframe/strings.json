@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "InkFrame for Immich",
-        "description": "The renderer that prepares photos for the ePaper panel (services/ImmichFrame). Enter the same renderer token configured on the panel. Settings take effect at the panel's next weekly wake.",
+        "description": "The renderer that prepares photos for the ePaper panel. Enter the same renderer token configured on the panel. Settings take effect at the panel's next weekly wake.",
         "data": {
           "url": "Renderer URL",
           "token": "Renderer token"

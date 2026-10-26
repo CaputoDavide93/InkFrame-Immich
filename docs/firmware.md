@@ -63,6 +63,22 @@ esphome run firmware/immich-frame.yaml --device <panel-ip>
 
 A small loop that watches for the panel and uploads the moment it appears saves a lot of waiting; see [Troubleshooting](troubleshooting.md#the-panel-is-asleep-and-i-need-it-now).
 
+### Flashing over the air, step by step
+
+A check wake lasts about seven seconds and holds no OTA window: the window is the `delay` inside `on_download_finished`, and a check downloads nothing. So the renderer treats an **OTA window** of 60 seconds or more as "somebody is about to flash" and makes the next wake redraw the photo already on the glass. The picture and the draw schedule do not change; the panel stays up for the window.
+
+1. In Home Assistant set **OTA window** to 300 seconds. (The author's dashboard has a **Prepare for update** button on its frame page that does this, keeps the old value, and messages when the panel wakes.)
+2. Start the waiting upload, so it fires the moment the panel answers:
+
+   ```bash
+   until nc -z -G 1 <panel-ip> 3232 2>/dev/null; do sleep 1; done
+   esphome upload firmware/immich-frame.yaml --device <panel-ip>
+   ```
+
+3. Wait for the next check: **Last check-in** plus **Sleep interval**. The firmware's `run_duration` backstop sleeps the panel 300 seconds after boot whatever the window says, so start the upload within about four minutes of the check-in.
+4. Set **OTA window** back to what it was (20 seconds by default). Left at 300, every wake redraws and holds five minutes awake, and the battery pays for it.
+5. Confirm the new build: the panel's ESPHome entities come back with the next wake, and **Last check-in** keeps moving.
+
 ## Entities the panel itself exposes
 
 These come from ESPHome, not from the `inkframe` integration, and are only reachable while the panel is awake:

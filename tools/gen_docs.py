@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Regenerate the inventory tables in the docs from the code.
 
-Hand-typed tables drift. Three of them here have a machine source of truth:
+Hand-typed tables drift. Four of them here have a machine source of truth:
 
   env       every os.environ.get(...) in server/src/app.py
   settings  SETTING_SPEC in server/src/app.py
-  endpoints every `if path == "/x"` route in the handler, described below
+  endpoints handler routes and HTTP methods, including nested paths and groups
+  modes     Source.VALID in server/src/app.py, the photo sources
 
 Each lands between <!-- AUTOGEN:name --> and <!-- /AUTOGEN:name --> markers.
 `--check` exits 1 if any file would change, for CI.
@@ -14,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import re
 import sys
 from pathlib import Path
 
@@ -23,7 +23,7 @@ APP = ROOT / "server" / "src" / "app.py"
 if not APP.exists():  # running inside the source monorepo, before export
     APP = ROOT / "src" / "app.py"
 
-TARGETS = [ROOT / "README.md", ROOT / "docs" / "api.md"]
+TARGETS = [ROOT / "README.md", ROOT / "docs" / "api.md", ROOT / "docs" / "home-assistant.md"]
 
 # Endpoint descriptions are prose and stay hand-written -- but a route with no
 # description, or a description for a route that no longer exists, fails the
@@ -31,12 +31,13 @@ TARGETS = [ROOT / "README.md", ROOT / "docs" / "api.md"]
 ENDPOINTS = {
     "/healthz": "Unauthenticated liveness only; carries `generation` but no photo or state",
     "/status": "Bearer-authenticated state: current photo, source, settings, people, `on_panel`, `last_error`",
-    "/wake": "**The panel's one call per wake.** Rotates only if the current frame was already collected; returns `sleep_seconds` and `ota_window_seconds`",
-    "/next": "Render a new photo now. Home Assistant's button. The panel never calls this",
-    "/frame.bmp": "The current frame as a 1-bit BMP. **Marks the frame as collected**",
-    "/frame.png": "The current frame as a 1-bit PNG. **Marks the frame as collected**",
-    "/frame.bin": "Raw 48,000-byte framebuffer, `?gen=&offset=&len=` for strip fetching. **Marks the frame as collected**",
-    "/preview.png": "The same frame for humans and for Home Assistant. Does **not** mark it as collected",
+    "/wake": "The panel's wake check; returns `draw`, `generation`, `sleep_seconds` and `ota_window_seconds`. A pending frame is held until its scheduled draw unless requested with `/next?now=1`; an OTA window of 60 s or more makes a check redraw the photo already shown, so the window is held; complete BMP or raw downloads acknowledge legacy firmware until the first valid authenticated POST to `/frame/ack`",
+    "/next": "Pick a different next photo and hold it for the scheduled draw; `?now=1` makes the next check draw it. Home Assistant's button. The panel never calls this",
+    "/frame.bmp": "The current or requested `?gen=N` frame as a 1-bit BMP, the format the panel draws. A completed download acknowledges legacy firmware until the first valid authenticated POST to `/frame/ack`, persisted across restarts; after that, downloading does not acknowledge display",
+    "/frame.png": "The current or requested `?gen=N` frame as a 1-bit PNG; downloading does not acknowledge display",
+    "/frame.bin": "Raw 48,000-byte framebuffer, `?gen=&offset=&len=` for strip fetching; a complete download acknowledges legacy firmware until the first valid authenticated POST to `/frame/ack`, persisted across restarts",
+    "/frame/ack": "Authenticated display acknowledgement after a successful panel draw: requires one positive, held generation via `?gen=N`; idempotent for the already acknowledged generation. Invalid input returns 400; an unheld generation returns 404",
+    "/preview.png": "The current or requested `?gen=N` frame for humans and Home Assistant; previewing does not acknowledge display",
     "/source": "Read or set where photos come from. Persisted",
     "/settings": "Read or set runtime settings. Validated; persisted",
     "/people": "Named faces with landscape counts and `eligible`",
@@ -84,7 +85,18 @@ SETTING_NOTES = {
     "sleep_hours": "Delivered to the panel on `/wake`",
     "refresh_days": "How often the picture on the glass actually changes. Most wakes only CHECK (~7s); a draw is ~35s",
     "refresh_hour": "Local hour for the scheduled draw. The first check at or after it, never an exact alarm",
-    "ota_window_seconds": "Delivered to the panel on `/wake`",
+    "ota_window_seconds": "Delivered to the panel on `/wake`. At 60 or more every wake draws the photo already on the glass, because only a drawing wake holds the window; Home Assistant's Prepare for update sets 300 for one wake",
+}
+# What each photo source draws from. Prose stays hand-written; a source with no
+# description, or a description for a source that no longer exists, fails the
+# build, like the tables above.
+MODE_NOTES = {
+    "random": ("Random", "The whole library, filtered by the settings"),
+    "person": ("a person's name", "Photos of one named person from Immich's face recognition"),
+    "people": ("People", "Photos of any of the people whose Include switch is on (a union, not an intersection)"),
+    "recent": ("Recent", "Photos taken in the last N days"),
+    "album": ("Album", "One album, read live from Immich"),
+    "search": ("Search", "Photos matching a description, ranked by Immich's smart search; the best 120 are kept"),
 }
 HA_EXPOSED = {"smooth", "curve", "edge", "max_busyness", "require_camera",
               "landscape_only", "sleep_hours", "ota_window_seconds",
@@ -152,19 +164,72 @@ def settings_table(source: str) -> str:
     return "\n".join(rows)
 
 
+def modes_table(source: str) -> str:
+    valid = None
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and getattr(node.targets[0], "id", "") == "VALID"):
+            valid = [e.value for e in node.value.elts]
+    if valid is None:
+        sys.exit("gen_docs: Source.VALID not found")
+    missing = sorted(set(valid) - set(MODE_NOTES))
+    if missing:
+        sys.exit(f"gen_docs: photo sources with no description: {missing}")
+    stale = sorted(set(MODE_NOTES) - set(valid))
+    if stale:
+        sys.exit(f"gen_docs: described photo sources that no longer exist: {stale}")
+    rows = ["| API `mode` | Home Assistant Source | Draws from |", "|---|---|---|"]
+    for mode in valid:
+        label, text = MODE_NOTES[mode]
+        rows.append(f"| `{mode}` | {label} | {text} |")
+    return "\n".join(rows)
+
+
 def endpoints_table(source: str) -> str:
-    routes = set(re.findall(r'if path == "(/[a-z._]+)"', source))
-    for group in re.findall(r'if path in \(([^)]*)\)', source):
-        routes.update(re.findall(r'"(/[a-z._]+)"', group))
-    missing = sorted(routes - set(ENDPOINTS))
+    """Discover Handler routes, shared methods and explicit method restrictions."""
+    routes: dict[str, set[str]] = {}
+    for handler in ast.walk(ast.parse(source)):
+        if not isinstance(handler, ast.ClassDef) or handler.name != "Handler":
+            continue
+        methods = {node.name[3:] for node in handler.body
+                   if isinstance(node, ast.FunctionDef) and node.name.startswith("do_")}
+        for function in handler.body:
+            if not isinstance(function, ast.FunctionDef):
+                continue
+            for branch in ast.walk(function):
+                if not isinstance(branch, ast.If) or not isinstance(branch.test, ast.Compare):
+                    continue
+                test = branch.test
+                if len(test.ops) != 1 or ast.unparse(test.left) not in {"path", "url.path"}:
+                    continue
+                target = test.comparators[0]
+                if isinstance(test.ops[0], ast.Eq) and isinstance(target, ast.Constant):
+                    paths = [target]
+                elif isinstance(test.ops[0], ast.In) and isinstance(target, (ast.Tuple, ast.List)):
+                    paths = target.elts
+                else:
+                    continue
+                allowed = {function.name[3:]} if function.name.startswith("do_") else methods.copy()
+                for guard in branch.body:
+                    if (isinstance(guard, ast.If) and isinstance(guard.test, ast.Compare)
+                            and ast.unparse(guard.test.left) == "method"
+                            and len(guard.test.ops) == 1
+                            and isinstance(guard.test.ops[0], ast.NotEq)
+                            and isinstance(guard.test.comparators[0], ast.Constant)):
+                        allowed &= {guard.test.comparators[0].value}
+                for route in paths:
+                    if isinstance(route, ast.Constant) and isinstance(route.value, str):
+                        routes.setdefault(route.value, set()).update(allowed)
+    missing = sorted(set(routes) - set(ENDPOINTS))
     if missing:
         sys.exit(f"gen_docs: routes with no description: {missing}")
-    stale = sorted(set(ENDPOINTS) - routes)
+    stale = sorted(set(ENDPOINTS) - set(routes))
     if stale:
         sys.exit(f"gen_docs: described routes that no longer exist: {stale}")
-    rows = ["| Path | Purpose |", "|---|---|"]
+    rows = ["| Method and path | Purpose |", "|---|---|"]
     for path in ENDPOINTS:  # documented order
-        rows.append(f"| `GET {path}` | {ENDPOINTS[path]} |")
+        requests = ", ".join(f"`{method} {path}`" for method in sorted(routes[path]))
+        rows.append(f"| {requests} | {ENDPOINTS[path]} |")
     return "\n".join(rows)
 
 
@@ -184,7 +249,7 @@ def main() -> int:
 
     source = APP.read_text()
     tables = {"env": env_table(source), "settings": settings_table(source),
-              "endpoints": endpoints_table(source)}
+              "endpoints": endpoints_table(source), "modes": modes_table(source)}
     changed = []
     for target in TARGETS:
         if not target.exists():

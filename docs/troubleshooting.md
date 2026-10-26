@@ -1,5 +1,16 @@
 # 🛠️ Troubleshooting
 
+Find your symptom, then read down to the fix. For anything not listed, [open an issue](https://github.com/CaputoDavide93/InkFrame-Immich/issues) with the renderer's `GET /status` output (token removed) and the log lines from one wake. [FAQ](faq.md) has the short answers.
+
+| Symptom | Go to |
+|---|---|
+| The frame shows the same photo and I want a new one | [The panel is asleep](#the-panel-is-asleep-and-i-need-it-now) and [The photo did not change](#the-photo-did-not-change) |
+| Home Assistant setup says it could not reach the renderer | [Setup says "Could not reach an InkFrame renderer"](#setup-says-could-not-reach-an-inkframe-renderer) |
+| The Source select lacks a person or an album | [People are missing](#people-i-expect-are-missing-from-the-source-select), [Albums](#i-made-an-album-in-immich-and-the-picker-does-not-offer-it) |
+| `/wake` or `/next` fails with "nothing matched" | [Nothing matched](#wake-and-next-fail-with-nothing-matched) |
+| The picture is speckled or a negative | [Too busy](#the-renderer-says-every-candidate-was-too-busy), [Negative](#the-picture-is-a-negative) |
+| The container cannot read the API key | [Docker key](#docker-the-container-cannot-read-the-api-key) |
+
 ## The panel is asleep and I need it now
 
 A sleeping panel has no network. It looks exactly like a dead one, and it will not answer until its timer fires or you press reset on the XIAO.
@@ -14,17 +25,21 @@ esphome upload firmware/immich-frame.yaml --device <panel-ip>
 
 The window is the OTA window (20 seconds by default) plus the time the fetch and draw take, about 35 seconds in total. If you want longer, turn the **Stay awake** switch on in Home Assistant while the panel is up.
 
+If you can wait for the next check instead of pressing reset, follow [Flashing over the air, step by step](firmware.md#flashing-over-the-air-step-by-step).
+
 ## The photo did not change
 
 Check `On panel` in Home Assistant, or `on_panel` in `/status`.
 
 | `on_panel` | Rendered generation | Meaning |
 |---|---|---|
-| true | unchanged for a week | The panel woke and collected, and `/wake` chose not to rotate because... it should have. Check the renderer log for `wake:` lines |
-| false | advanced | A new frame exists and the panel has not fetched it. Either the panel has not woken yet, or its fetch failed. Look at `Last panel fetch` |
+| true | unchanged for a week | The panel acknowledged the current generation. Check the configured refresh interval and renderer `wake:` logs |
+| false | advanced | A newer frame has not been acknowledged. Check wake, download, display-driver and acknowledgement failures; `Last panel fetch` records the last acknowledged draw |
 | false | unchanged | The renderer has not been asked to render. Nothing called `/wake` or `/next` |
 
 E-paper keeps its image with no power, so the glass alone tells you nothing.
+
+Older firmware downloads `/frame.bmp` and never sends `POST /frame/ack?gen=N`. Until the renderer has recorded one valid acknowledgement, a completed `/frame.bmp` or `/frame.bin` download counts as the draw, so a renderer updated before the panel keeps rotating. The first valid acknowledgement switches that fallback off and is remembered in `/data/panel-protocol.json`. If the panel is ever flashed back to firmware without acknowledgements, delete that file and restart the renderer, or the photo stops changing. The acknowledgement also cannot detect a physical display fault that the driver does not report.
 
 ## An album with photos in it reports as empty
 
@@ -79,9 +94,15 @@ A person is offered only above `MIN_PERSON_PHOTOS` eligible landscape photograph
 
 Your source is mostly foliage. Lower **Max busyness** and the frame will show calmer photos; raise it and accept some speckle. The `Candidates rejected` sensor tells you how hard the threshold is working.
 
-## Setup says "Could not reach an ImmichFrame renderer"
+## Setup says "Could not reach an InkFrame renderer"
 
-The URL answered, but not with a renderer. Setup probes `/healthz` and requires a `generation` field so that pointing the integration at Immich itself, or at another service on the same host, fails at setup instead of on the first poll.
+Setup calls the renderer's `/status` with the token you entered, and requires a `generation` field in the reply. It fails when the address is wrong, when the renderer is not running, when the token does not match (the renderer answers `401`), or when the URL points at another service such as Immich itself. Check from the Home Assistant host:
+
+```bash
+curl -s -H "Authorization: Bearer $(cat ~/Secrets/inkframe_token)" http://<renderer-host>:8099/status
+```
+
+A JSON reply means the renderer is fine and the token or URL typed into the form is not. Setup logs the reason as a warning in **Settings → System → Logs**.
 
 ## Docker: the container cannot read the API key
 

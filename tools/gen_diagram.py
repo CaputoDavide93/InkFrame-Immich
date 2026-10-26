@@ -30,6 +30,7 @@ or above 4.5:1 in both schemes.
 from __future__ import annotations
 
 import pathlib
+import sys
 from xml.sax.saxutils import escape
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -416,12 +417,25 @@ DIAGRAMS = {
 
 
 def main() -> None:
+    check = "--check" in sys.argv[1:]
     out = ROOT / "docs" / "assets"
     out.mkdir(parents=True, exist_ok=True)
+    stale = []
     for name, fn in DIAGRAMS.items():
         for scheme in SCHEMES:
             path = out / f"{name}-{scheme}.svg"
-            path.write_text(fn(scheme), encoding="utf-8")
+            svg = fn(scheme)
+            if check:
+                if not path.exists() or path.read_text(encoding="utf-8") != svg:
+                    stale.append(str(path.relative_to(ROOT)))
+            else:
+                path.write_text(svg, encoding="utf-8")
+    if check:
+        if stale:
+            print("stale diagrams (run python3 tools/gen_diagram.py):\n  " + "\n  ".join(stale))
+            sys.exit(1)
+        print(f"{len(DIAGRAMS) * len(SCHEMES)} diagram files up to date")
+        return
     print(f"{len(DIAGRAMS)} diagrams x {len(SCHEMES)} schemes -> docs/assets/")
 
 

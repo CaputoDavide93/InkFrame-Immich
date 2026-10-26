@@ -6,6 +6,11 @@
   brand/logo.png       1024x256  wordmark
   brand/logo@2x.png    2048x512  hDPI wordmark, for home-assistant/brands
   docs/assets/demo.png           a synthetic scene beside its one-bit render
+  docs/assets/brand/icon.svg     the family tile, drawn by brand_kit.py (README header)
+  docs/assets/social-preview.png 1280x640 from brand_kit.py, uploaded by hand in the repository settings
+
+brand/ is what the product and HACS ship and stays as drawn here; the tile and
+the social preview come from the shared kit in brand_kit.py (needs headless Chrome).
 
 The demo is deliberately synthetic. The real frames this was built on are
 family photographs, and a public repository is not the place for them; a
@@ -25,6 +30,7 @@ SRC = ROOT / "server" / "src"
 if not SRC.exists():
     SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from immich import PANEL_H, PANEL_W, render  # noqa: E402
 
 INK = (26, 26, 26)
@@ -206,8 +212,12 @@ def main() -> None:
     # hDPI logo, so 2048x512 rather than a doubling of an already-wide image.
     logo(2).save(ROOT / "brand" / "logo@2x.png")
     demo().save(ROOT / "docs" / "assets" / "demo.png", optimize=True)
+    import brand_kit
+    brand_kit.main(["icon", "--out", str(ROOT / "docs" / "assets" / "brand")])
+    brand_kit.main(["social", "--icon", str(ROOT / "docs" / "assets" / "brand" / "icon.svg"),
+                    "--out", str(ROOT / "docs" / "assets" / "social-preview.png")])
     print("brand/icon.png brand/icon@2x.png brand/logo.png brand/logo@2x.png "
-          "docs/assets/demo.png")
+          "docs/assets/demo.png docs/assets/brand/icon.svg docs/assets/social-preview.png")
 
 
 if __name__ == "__main__":

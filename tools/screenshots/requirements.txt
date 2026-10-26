@@ -1,0 +1,15 @@
+# The screenshot environment (make screenshots), kept apart from the renderer's
+# own requirements. Home Assistant and its frontend are the pair the SunBridge
+# project pins and tests against; the integration's manifest asks for 2025.1.0
+# or newer, so a current release is a fair demo.
+homeassistant==2026.9.4
+home-assistant-frontend==20260826.7
+playwright==1.64.1
+# Pillow and numpy come with Home Assistant, at the versions it pins; the
+# renderer runs on those here, which is fine for pictures.
+pillow
+numpy
+# Imported by built-in integrations the frontend asks about at start-up.
+mutagen==1.48.1
+pymicro-vad==1.0.1
+pyspeex-noise==1.0.2

@@ -1,6 +1,6 @@
 """The framebuffer is copied byte-for-byte into the panel, so its shape and
 polarity are contracts, not details."""
-import sys, pathlib
+import json, sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 import pytest
@@ -180,21 +180,518 @@ def _store(tmp_path):
     st.generations, st.meta, st.encoded = {}, {}, {}
     st.current = 0
     st.fetched_generation, st.fetched_at = 0, None
+    # These persistence tests construct only the state needed for disk I/O.
+    # They do not run the background preview renderer.
+    st.render_preview_soon = lambda: None
     return st
+
+
+def _pending_frame(tmp_path):
+    from unittest import mock
+    import app
+
+    store = _store(tmp_path)
+    store.source = app.Source(store.source.path)
+    store.generations = {1: bytes(FRAME_BYTES), 2: bytes([0xFF]) * FRAME_BYTES}
+    store.meta = {
+        1: {"name": "displayed.jpg", "asset_id": "asset-1"},
+        2: {"name": "waiting.jpg", "asset_id": "asset-2"},
+    }
+    store.current = 1
+    store.note_panel_fetch(1)
+    store.current = 2
+    store.preview = True
+    store._persist(store.generations[2], dict(store.meta[2]))
+    store.render_preview_soon = mock.Mock()
+    store.last_error = None
+    store.last_wake_at = 0.0
+    store.recent = []
+    store.people_summary = lambda: {}
+    store.albums_cached = lambda: []
+    return store
+
+
+def _renderer_handler(store, url, *, method="GET",
+                      authorization="Bearer test-renderer-token"):
+    from io import BytesIO
+    import app
+
+    handler = app.Handler.__new__(app.Handler)
+    handler.store = store
+    handler.path = url
+    handler.command = method
+    handler.token = "test-renderer-token"
+    handler.headers = {"Authorization": authorization} if authorization else {}
+    handler.wfile = BytesIO()
+    handler.response_codes = []
+    handler.response_headers = {}
+    handler.send_response = handler.response_codes.append
+    handler.send_header = handler.response_headers.__setitem__
+    handler.end_headers = lambda: None
+    return handler
+
+
+def _display_state(store):
+    panel = pathlib.Path(store._frame_path("panel"))
+    return (
+        store.fetched_generation, store.fetched_at, store.preview,
+        store.next_refresh_at(), panel.read_bytes(),
+        pathlib.Path(str(panel) + ".json").read_bytes(),
+    )
+
+
+@pytest.mark.parametrize("route", ["/frame.bmp", "/frame.png", "/frame.bin", "/preview.png"])
+def test_downloading_a_frame_does_not_acknowledge_display(tmp_path, route):
+    store = _pending_frame(tmp_path)
+    store.note_ack_capable()
+    before = _display_state(store)
+    handler = _renderer_handler(store, f"{route}?gen=2")
+
+    handler.do_GET()
+
+    assert handler.response_codes == [200]
+    assert handler.response_headers["X-Frame-Generation"] == "2"
+    assert handler.wfile.getvalue()
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["/frame.bmp", "/frame.png"])
+def test_encoding_failure_cannot_acknowledge_display(tmp_path, monkeypatch, route):
+    from unittest import mock
+
+    store = _pending_frame(tmp_path)
+    before = _display_state(store)
+    monkeypatch.setattr(store, "encode", mock.Mock(side_effect=ValueError("encoding failed")))
+    handler = _renderer_handler(store, f"{route}?gen=2")
+
+    handler.do_GET()
+
+    assert handler.response_codes == [500]
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["/frame.bmp", "/frame.png", "/frame.bin"])
+def test_broken_response_cannot_acknowledge_display(tmp_path, route):
+    from unittest import mock
+
+    store = _pending_frame(tmp_path)
+    before = _display_state(store)
+    handler = _renderer_handler(store, f"{route}?gen=2")
+    handler.wfile = mock.Mock()
+    handler.wfile.write.side_effect = [BrokenPipeError("panel disconnected"), None]
+
+    handler.do_GET()
+
+    assert handler.wfile.write.call_count >= 1
+    assert handler.response_codes[0] == 200
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+@pytest.mark.parametrize("offset", [0, 4096, FRAME_BYTES - 4096, FRAME_BYTES + 1])
+def test_bin_chunks_and_invalid_ranges_never_acknowledge_display(tmp_path, offset):
+    store = _pending_frame(tmp_path)
+    before = _display_state(store)
+    handler = _renderer_handler(store, f"/frame.bin?gen=2&offset={offset}&len=4096")
+
+    handler.do_GET()
+
+    assert handler.response_codes == [416 if offset > FRAME_BYTES else 200]
+    if offset <= FRAME_BYTES:
+        assert handler.wfile.getvalue() == store.generations[2][offset:offset + 4096]
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+@pytest.mark.parametrize("newer_render", [False, True], ids=["newest", "older-held"])
+def test_authenticated_ack_records_only_the_displayed_generation(tmp_path, newer_render):
+    import json
+
+    store = _pending_frame(tmp_path)
+    previous_time = store.fetched_at
+    store.fetched_at = 1.0
+    if newer_render:
+        store.current = 3
+        store.generations[3] = bytes([0x55]) * FRAME_BYTES
+        store.meta[3] = {"name": "newest.jpg", "asset_id": "asset-3"}
+        store._persist(store.generations[3], dict(store.meta[3]))
+    handler = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+
+    handler.do_POST()
+
+    assert handler.response_codes == [200]
+    assert json.loads(handler.wfile.getvalue())["generation"] == 2
+    assert store.fetched_generation == 2
+    assert store.fetched_at >= previous_time
+    assert pathlib.Path(store._frame_path("panel")).read_bytes() == store.generations[2]
+    saved = json.loads(pathlib.Path(store._frame_path("panel") + ".json").read_text())
+    assert saved["asset_id"] == "asset-2"
+    assert saved["_fetched_at"] == store.fetched_at
+    status = _renderer_handler(store, "/status")
+    status.do_GET()
+    body = json.loads(status.wfile.getvalue())
+    assert body["panel_fetched_generation"] == 2
+    assert body["on_panel"] is (not newer_render)
+    assert body["on_panel_photo"]["asset_id"] == "asset-2"
+    if newer_render:
+        assert store.preview is True
+        store.render_preview_soon.assert_not_called()
+    else:
+        assert store.preview is False
+        store.render_preview_soon.assert_called_once_with()
+    revived = _store(tmp_path)
+    revived._restore()
+    assert revived.meta[revived.fetched_generation]["asset_id"] == "asset-2"
+    assert revived.fetched_at == store.fetched_at
+    assert revived.meta[revived.current]["asset_id"] == ("asset-3" if newer_render else "asset-2")
+
+
+@pytest.mark.parametrize("authorization", [None, "Bearer wrong-test-token"])
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_display_ack_requires_renderer_authentication(tmp_path, authorization, method):
+    store = _pending_frame(tmp_path)
+    before = _display_state(store)
+    handler = _renderer_handler(
+        store, "/frame/ack?gen=2", method=method, authorization=authorization,
+    )
+
+    getattr(handler, f"do_{method}")()
+
+    assert handler.response_codes == [401]
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+def test_get_cannot_acknowledge_display(tmp_path):
+    store = _pending_frame(tmp_path)
+    before = _display_state(store)
+    handler = _renderer_handler(store, "/frame/ack?gen=2")
+
+    handler.do_GET()
+
+    assert handler.response_codes == [405]
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+@pytest.mark.parametrize("query,expected_code", [
+    ("", 400), ("?gen=", 400), ("?gen=invalid", 400),
+    ("?gen=-1", 400), ("?gen=0", 400), ("?gen=2&gen=1", 400),
+    ("?gen=2.0", 400), ("?gen=+2", 400), ("?gen=true", 400),
+    ("?gen=999", 404),
+], ids=["missing", "blank", "not-integer", "negative", "zero", "ambiguous",
+        "fractional", "signed", "boolean", "unknown"])
+def test_invalid_display_ack_cannot_change_state(tmp_path, query, expected_code):
+    store = _pending_frame(tmp_path)
+    before = _display_state(store)
+    handler = _renderer_handler(store, f"/frame/ack{query}", method="POST")
+
+    handler.do_POST()
+
+    assert handler.response_codes == [expected_code]
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+def test_store_rejects_an_unknown_ack_before_recording_display(tmp_path):
+    store = _pending_frame(tmp_path)
+    before = _display_state(store)
+
+    with pytest.raises(KeyError):
+        store.note_panel_fetch(999)
+
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+@pytest.mark.parametrize("newer_preview", [False, True])
+def test_duplicate_ack_does_not_postpone_the_next_draw(tmp_path, monkeypatch, newer_preview):
+    """A retried display ACK is inert even after the next preview is ready."""
+    import app
+
+    store = _pending_frame(tmp_path)
+    first = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+    monkeypatch.setattr(app.time, "time", lambda: 1_800_000_000.0)
+    first.do_POST()
+    assert first.response_codes == [200]
+    if newer_preview:
+        store.current = 3
+        store.generations[3] = bytes([0x55]) * FRAME_BYTES
+        store.meta[3] = {"name": "preview.jpg", "asset_id": "asset-3"}
+        store.preview = True
+    before = _display_state(store)
+    store.render_preview_soon.reset_mock()
+    monkeypatch.setattr(app.time, "time", lambda: 1_800_000_060.0)
+    retry = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+
+    retry.do_POST()
+
+    assert retry.response_codes == [200]
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+def test_retry_of_a_pinned_download_never_switches_to_a_newer_render(tmp_path):
+    store = _pending_frame(tmp_path)
+    store.note_ack_capable()  # the ACK firmware; legacy BMP acks are tested below
+    before = _display_state(store)
+    first = _renderer_handler(store, "/frame.bmp?gen=2")
+    first.do_GET()
+    store.current = 3
+    store.generations[3] = bytes([0x55]) * FRAME_BYTES
+    store.meta[3] = {"name": "newest.jpg", "asset_id": "asset-3"}
+    retry = _renderer_handler(store, "/frame.bmp?gen=2")
+
+    retry.do_GET()
+
+    assert first.response_codes == retry.response_codes == [200]
+    assert first.response_headers["X-Frame-Generation"] == "2"
+    assert retry.response_headers["X-Frame-Generation"] == "2"
+    assert retry.wfile.getvalue() == first.wfile.getvalue()
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+@pytest.fixture
+def rendering_store(tmp_path, monkeypatch):
+    from unittest import mock
+    import app
+
+    store = app.FrameStore(mock.Mock(), app.Source(str(tmp_path / "state.json")))
+    store.client.faces.return_value = []
+    store.render_preview_soon = mock.Mock()
+    store._pool = lambda: [{"id": f"asset-{store.current + 1}"}]
+    monkeypatch.setattr(app, "detail_score", lambda _image: 0)
+    monkeypatch.setattr(app, "render", lambda *_args, **_kwargs:
+                        Image.new("1", (PANEL_W, PANEL_H), store.current % 2))
+    monkeypatch.setattr(app, "_touch", lambda _path: None)
+    store.rotate()
+    store.note_panel_fetch(1)
+    store.rotate(preview=True)
+    store.render_preview_soon.reset_mock()
+    return store
+
+
+def test_downloaded_generation_survives_render_advance_and_long_draw(rendering_store, monkeypatch):
+    import app
+
+    store = rendering_store
+    download = _renderer_handler(store, "/frame.bin?gen=2&offset=0&len=4096")
+    download.do_GET()
+    assert download.response_codes == [200]
+    payload = store.generations[2]
+    before = _display_state(store)
+    for _index in range(20):
+        store.rotate(preview=True)
+    monkeypatch.setattr(app.time, "time", lambda: before[1] + 86400)
+    retry = _renderer_handler(store, "/frame.bin?gen=2&offset=4096&len=4096")
+    retry.do_GET()
+    assert retry.response_codes == [200], "render advance evicted the in-flight download"
+    assert retry.wfile.getvalue() == payload[4096:8192]
+    assert _display_state(store)[:2] == before[:2]
+    ack = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [200]
+    assert store.fetched_generation == 2
+    assert store.meta[store.fetched_generation]["asset_id"] == "asset-2"
+    assert pathlib.Path(store._frame_path("panel")).read_bytes() == payload
+    assert len(store.generations) <= 4
+
+
+@pytest.mark.parametrize("advances", [1, 20], ids=["next-render", "many-renders"])
+def test_restart_preserves_download_identity_and_next_generation(rendering_store, advances):
+    from unittest import mock
+    import app
+
+    store = rendering_store
+    store.note_ack_capable()  # the ACK firmware: the download alone is not the draw
+    download = _renderer_handler(store, "/frame.bmp?gen=2")
+    download.do_GET()
+    assert download.response_codes == [200]
+    payload = store.generations[2]
+    for _index in range(advances):
+        store.rotate(preview=True)
+    newest = store.current
+    revived = app.FrameStore(mock.Mock(), store.source)
+    revived.render_preview_soon = mock.Mock()
+    ack = _renderer_handler(revived, "/frame/ack?gen=2", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [200]
+    assert revived.meta[revived.fetched_generation]["asset_id"] == "asset-2", "ACK 2 must not record C"
+    assert pathlib.Path(revived._frame_path("panel")).read_bytes() == payload
+    assert revived.current == newest
+    assert revived.meta[newest]["asset_id"] == f"asset-{newest}"
+    again = app.FrameStore(store.client, store.source)
+    again._pool = lambda: [{"id": "after-restart"}]
+    assert again.current == newest
+    assert again.fetched_generation == 2
+    assert again.rotate() == newest + 1
+
+
+@pytest.mark.parametrize("restart", [False, True], ids=["running", "restarted"])
+def test_old_ack_replay_after_newer_ack_never_regresses_display(rendering_store, monkeypatch, restart):
+    from unittest import mock
+    import app
+
+    store = rendering_store
+    for generation in (2, 3):
+        if generation == 3:
+            store.rotate(preview=True)
+        ack = _renderer_handler(store, f"/frame/ack?gen={generation}", method="POST")
+        ack.do_POST()
+        assert ack.response_codes == [200]
+    if restart:
+        store = app.FrameStore(mock.Mock(), store.source)
+        store.render_preview_soon = mock.Mock()
+    before = _display_state(store)
+    store.render_preview_soon.reset_mock()
+    monkeypatch.setattr(app.time, "time", lambda: before[1] + 86400)
+    replay = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+    replay.do_POST()
+    assert replay.response_codes[0] in (200, 404, 409)
+    assert _display_state(store) == before, "stale ACK rewrote display state or postponed the draw"
+    store.render_preview_soon.assert_not_called()
+
+
+def test_legacy_frames_migrate_without_accepting_an_ambiguous_old_ack(tmp_path):
+    import json
+    from unittest import mock
+    import app
+
+    for slot, value, meta in (
+        ("panel", 0, {"asset_id": "legacy-A", "_fetched_at": 123.0}),
+        ("frame", 255, {"asset_id": "legacy-C", "_preview": True}),
+    ):
+        (tmp_path / f"{slot}.bin").write_bytes(bytes([value]) * FRAME_BYTES)
+        (tmp_path / f"{slot}.bin.json").write_text(json.dumps(meta))
+    store = app.FrameStore(mock.Mock(), app.Source(str(tmp_path / "state.json")))
+    store.render_preview_soon = mock.Mock()
+    before = _display_state(store)
+    ack = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [404], "legacy files cannot prove what old generation 2 contained"
+    assert _display_state(store) == before
+    assert store.meta[store.fetched_generation]["asset_id"] == "legacy-A"
+    assert store.meta[store.current]["asset_id"] == "legacy-C"
+    assert store.preview is True
+    revived = app.FrameStore(mock.Mock(), store.source)
+    assert (revived.current, revived.fetched_generation) == (store.current, store.fetched_generation)
+    assert revived.fetched_at == 123.0
+
+
+def test_pending_download_storage_is_bounded_and_released_on_ack(rendering_store, tmp_path):
+    rendering_store.note_ack_capable()
+    store = rendering_store
+    for _index in range(20):
+        download = _renderer_handler(store, f"/frame.bin?gen={store.current}")
+        download.do_GET()
+        assert download.response_codes == [200]
+        assert pathlib.Path(store._frame_path("download")).exists()
+        assert pathlib.Path(store._frame_path("download") + ".json").exists()
+        store.rotate(preview=True)
+        assert len(store.generations) <= 4
+        assert len(list(tmp_path.glob("*.bin"))) <= 3
+        assert len(list(tmp_path.glob("*.bin.json"))) <= 3
+    pending = store.current - 1
+    ack = _renderer_handler(store, f"/frame/ack?gen={pending}", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [200]
+    assert store.downloading_generation == 0
+    assert not pathlib.Path(store._frame_path("download")).exists()
+    assert not pathlib.Path(store._frame_path("download") + ".json").exists()
+
+
+def test_failed_render_persistence_does_not_publish_a_generation(rendering_store, monkeypatch):
+    store = rendering_store
+    before = (store.current, store.next_generation, dict(store.generations), dict(store.meta))
+    monkeypatch.setattr(store, "_persist", lambda *_args, **_kwargs: False)
+    with pytest.raises(OSError, match="save the rendered generation"):
+        store.rotate()
+    assert (store.current, store.next_generation, store.generations, store.meta) == before
+
+
+def test_failed_ack_persistence_cannot_report_display_success(rendering_store, monkeypatch):
+    store = rendering_store
+    before = _display_state(store)
+    monkeypatch.setattr(store, "_persist", lambda *_args, **_kwargs: False)
+    ack = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [500]
+    assert _display_state(store) == before
+    store.render_preview_soon.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["/frame.bmp", "/frame.png", "/frame.bin", "/preview.png"])
+@pytest.mark.parametrize("authorization", [None, "Bearer wrong-test-token"])
+def test_pinned_image_get_requires_auth_without_changing_pending_state(rendering_store, route, authorization):
+    store = rendering_store
+    before = _display_state(store)
+    handler = _renderer_handler(store, f"{route}?gen=2", authorization=authorization)
+    handler.do_GET()
+    assert handler.response_codes == [401]
+    assert _display_state(store) == before
+    assert store.downloading_generation == 0
+
+
+@pytest.mark.parametrize("route", ["/frame.bmp", "/frame.png", "/frame.bin", "/preview.png"])
+@pytest.mark.parametrize("generation", ["999", "invalid", "-1", "0"])
+def test_unknown_or_malformed_pinned_image_get_stays_not_found(rendering_store, route, generation):
+    store = rendering_store
+    before = _display_state(store)
+    handler = _renderer_handler(store, f"{route}?gen={generation}")
+    handler.do_GET()
+    assert handler.response_codes == [404]
+    assert _display_state(store) == before
+    assert store.downloading_generation == 0
+
+
+@pytest.mark.parametrize("route", ["/frame/ack/extra?gen=2", "/frame/unknown?gen=2", "/not-a-route"])
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_unknown_routes_cannot_ack_or_pin_a_frame(rendering_store, route, method):
+    store = rendering_store
+    before = _display_state(store)
+    handler = _renderer_handler(store, route, method=method)
+    getattr(handler, f"do_{method}")()
+    assert handler.response_codes == [404]
+    assert _display_state(store) == before
+    assert store.downloading_generation == 0
+
+
+def test_preview_reads_cannot_displace_the_single_pending_panel_download(rendering_store):
+    store = rendering_store
+    store.note_ack_capable()  # the ACK firmware: the download alone is not the draw
+    download = _renderer_handler(store, "/frame.bmp?gen=2")
+    download.do_GET()
+    assert download.response_codes == [200]
+    for _index in range(10):
+        store.rotate(preview=True)
+        preview = _renderer_handler(store, "/preview.png")
+        preview.do_GET()
+        assert preview.response_codes == [200]
+        assert store.downloading_generation == 2
+        assert 2 in store.generations
+        assert len(store.generations) <= 4
+        assert len(store.encoded) <= 8
+    ack = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [200]
+    assert store.meta[store.fetched_generation]["asset_id"] == "asset-2"
 
 
 def test_a_saved_frame_survives_a_restart(tmp_path):
     """Before this, a restart left generation 0 and every image route
-    answering 500, indefinitely when the source had run dry."""
+    answering 500. Legacy snapshots migrate to fresh, unambiguous IDs."""
     store = _store(tmp_path)
     payload = bytes(FRAME_BYTES)
     store._persist(payload, {"name": "kept.jpg", "asset_id": "a1"})
 
     revived = _store(tmp_path)
     revived._restore()
-    assert revived.current == 1
-    assert revived.generations[1] == payload
-    assert revived.meta[1]["name"] == "kept.jpg"
+    assert revived.current > 2
+    assert revived.generations[revived.current] == payload
+    assert revived.meta[revived.current]["name"] == "kept.jpg"
 
 
 def test_a_truncated_saved_frame_is_refused(tmp_path):
@@ -257,8 +754,11 @@ def test_asking_for_a_generation_that_is_gone_is_an_error_not_another_photo():
 
 
 def test_the_panel_having_collected_a_frame_survives_a_restart(tmp_path):
-    """Otherwise the renderer restarts, `On the panel` reads unknown and
-    `Up next` claims a photo is waiting, while the wall has not changed."""
+    """An explicit display ACK and its ID survive restart; a GET is not an ACK.
+
+    Otherwise `On the panel` reads unknown and `Up next` claims a photo is
+    waiting, while the wall has not changed.
+    """
     store = _store(tmp_path)
     store.generations = {4: bytes(FRAME_BYTES)}
     store.meta = {4: {"name": "onwall.jpg", "asset_id": "a1"}}
@@ -268,10 +768,10 @@ def test_the_panel_having_collected_a_frame_survives_a_restart(tmp_path):
 
     revived = _store(tmp_path)
     revived._restore()
-    assert revived.fetched_generation == 1, "the panel's photo came back as not collected"
+    assert revived.fetched_generation == 4, "the acknowledged identity changed on restart"
     assert revived.fetched_at is not None
-    assert revived.meta[1]["name"] == "onwall.jpg"
-    assert "_was_on_panel" not in revived.meta[1], "internal bookkeeping leaked into /status"
+    assert revived.meta[4]["name"] == "onwall.jpg"
+    assert "_was_on_panel" not in revived.meta[4], "internal bookkeeping leaked into /status"
 
 
 def test_a_render_after_a_collection_keeps_both_pictures(tmp_path):
@@ -301,7 +801,7 @@ def test_a_render_after_a_collection_keeps_both_pictures(tmp_path):
 
 def test_one_picture_collected_restores_as_one_generation(tmp_path):
     """When the panel has the newest photo there is nothing waiting, and
-    `on_panel` must read true rather than inventing a second generation."""
+    `on_panel` stays true with the same ID, not an invented generation."""
     frame = bytes(FRAME_BYTES)
     store = _store(tmp_path)
     store.generations = {3: frame}
@@ -312,7 +812,7 @@ def test_one_picture_collected_restores_as_one_generation(tmp_path):
 
     revived = _store(tmp_path)
     revived._restore()
-    assert revived.current == revived.fetched_generation == 1
+    assert revived.current == revived.fetched_generation == 3
 
 
 def test_restarting_does_not_consume_a_photo():
@@ -484,3 +984,165 @@ def test_a_failed_count_retries_instead_of_sleeping_a_whole_day():
     assert "min(wait, PEOPLE_RECOUNT_SECONDS)" in body, \
         "a retry must never wait longer than the ordinary daily count"
     assert app.PEOPLE_RETRY_MAX_SECONDS < app.PEOPLE_RECOUNT_SECONDS
+
+
+def test_legacy_complete_download_advances_until_first_post_and_after_restart(tmp_path):
+    import app
+    store = _pending_frame(tmp_path)
+    download = _renderer_handler(store, "/frame.bin?gen=2")
+    download.do_GET()
+    assert store.fetched_generation == 2
+    store.render_preview_soon.assert_called_once()
+
+    ack = _renderer_handler(store, "/frame/ack?gen=2", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [200]
+    revived = app.FrameStore(None, app.Source(store.source.path))
+    revived.render_preview_soon = lambda: None
+    revived.generations[3] = bytes(FRAME_BYTES)
+    revived.meta[3] = {}
+    revived.current = 3
+    _renderer_handler(revived, "/frame.bin?gen=3").do_GET()
+    assert revived.fetched_generation == 2, "ACK-capable firmware must stay strict after restart"
+
+
+def test_legacy_strips_only_ack_after_the_complete_download(tmp_path):
+    store = _pending_frame(tmp_path)
+    for offset in range(0, FRAME_BYTES, 4096):
+        _renderer_handler(store, f"/frame.bin?gen=2&offset={offset}&len=4096").do_GET()
+        assert store.fetched_generation == (2 if offset + 4096 >= FRAME_BYTES else 1)
+
+
+# The firmware on the panel today (hub/home-assistant/esphome/immich-frame.yaml
+# on main before the ACK firmware) fetches exactly `/frame.bmp`, no query, and
+# never POSTs /frame/ack. A renderer deployed before the panel is reflashed must
+# still count that download as the draw, or every wake redraws the same photo.
+CURRENT_FIRMWARE_URLS = ["/frame.bmp", "/frame.bmp?gen=2"]
+
+
+@pytest.mark.parametrize("url", CURRENT_FIRMWARE_URLS)
+def test_current_firmware_bmp_download_acknowledges_until_first_post(tmp_path, url):
+    store = _pending_frame(tmp_path)
+    store.preview = False   # asked for with /next?now=1, so /wake says draw
+    wake = _renderer_handler(store, "/wake")
+    wake.do_GET()
+    assert json.loads(wake.wfile.getvalue())["draw"] is True
+
+    download = _renderer_handler(store, url)
+    download.do_GET()
+
+    assert download.response_codes == [200]
+    assert store.fetched_generation == 2, "the BMP the panel drew must count as displayed"
+    store.render_preview_soon.assert_called_once()
+    later = _renderer_handler(store, "/wake")
+    later.do_GET()
+    assert json.loads(later.wfile.getvalue())["draw"] is False, \
+        "the next check must be a 7 s check, not another 35 s redraw"
+
+
+@pytest.mark.parametrize("route", ["/frame.png", "/preview.png"])
+def test_legacy_fallback_is_the_panel_bmp_only(tmp_path, route):
+    store = _pending_frame(tmp_path)
+    before = _display_state(store)
+    _renderer_handler(store, f"{route}?gen=2").do_GET()
+    assert _display_state(store) == before
+
+
+@pytest.mark.parametrize("url", ["/frame.bmp?gen=2", "/frame.bin?gen=2"])
+def test_a_failed_legacy_ack_never_writes_a_second_response(tmp_path, monkeypatch, url):
+    from unittest import mock
+    store = _pending_frame(tmp_path)
+    monkeypatch.setattr(store, "note_panel_fetch", mock.Mock(side_effect=OSError("disk full")))
+    handler = _renderer_handler(store, url)
+
+    handler.do_GET()
+
+    assert handler.response_codes == [200], "the frame was already sent; a 500 after it corrupts the socket"
+    assert b'"error"' not in handler.wfile.getvalue()
+
+
+@pytest.mark.parametrize("query", ["", "?gen=0", "?gen=99", "?gen=abc"])
+def test_only_a_valid_ack_opts_into_strict_acknowledgement(tmp_path, query):
+    store = _pending_frame(tmp_path)
+    _renderer_handler(store, f"/frame/ack{query}", method="POST").do_POST()
+
+    assert getattr(store, "ack_capable", False) is False
+    assert not (tmp_path / "panel-protocol.json").exists()
+    _renderer_handler(store, "/frame.bmp").do_GET()
+    assert store.fetched_generation == 2, "a stray POST must not freeze the current firmware"
+
+
+def test_a_valid_ack_opts_in_and_later_bmp_downloads_do_not_acknowledge(tmp_path):
+    store = _pending_frame(tmp_path)
+    ack = _renderer_handler(store, "/frame/ack?gen=1", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [200]
+    assert store.ack_capable is True
+    _renderer_handler(store, "/frame.bmp").do_GET()
+    assert store.fetched_generation == 1
+
+# --- a long OTA window makes a check hold the window (2026-10-22) -----------
+
+def _wake(store, ota_seconds):
+    import json
+    from unittest import mock
+
+    store.source.settings["ota_window_seconds"] = ota_seconds
+    store.scheduled_refresh_due = lambda: False
+    store.next_refresh_description = lambda: "later"
+    store.rotate = mock.Mock(side_effect=AssertionError("a wake for a flash must not render"))
+    handler = _renderer_handler(store, "/wake")
+    handler.do_GET()
+    assert handler.response_codes == [200]
+    return json.loads(handler.wfile.getvalue())
+
+
+def test_a_normal_window_still_lets_a_check_sleep(tmp_path):
+    """The default 20 seconds changes nothing: a check is still a check."""
+    store = _pending_frame(tmp_path)
+    reply = _wake(store, 20)
+    assert reply["draw"] is False
+    assert reply["ota_window_seconds"] == 20
+
+
+def test_a_flash_window_redraws_the_photo_already_on_the_glass(tmp_path):
+    """Only a drawing wake holds the OTA window (the firmware's delay lives in
+    on_download_finished). So "Prepare for update" (300 s) has to make the
+    next CHECK draw, or the panel sleeps seven seconds later and the button
+    promised a window that never opened. It draws what the panel already
+    shows, not the held preview, so the wall, `on_panel` and the schedule
+    are exactly as they were once the panel acknowledges it."""
+    store = _pending_frame(tmp_path)
+    store.note_ack_capable()
+    before = _display_state(store)
+    reply = _wake(store, 300)
+    assert reply["draw"] is True
+    assert reply["generation"] == 1, "the photo on the glass, not the held preview"
+    assert reply["ota_window_seconds"] == 300
+
+    fetch = _renderer_handler(store, "/frame.bmp?gen=1")
+    fetch.do_GET()
+    assert fetch.response_codes == [200]
+    ack = _renderer_handler(store, "/frame/ack?gen=1", method="POST")
+    ack.do_POST()
+    assert ack.response_codes == [200]
+    assert _display_state(store) == before
+    assert store.current == 2 and store.preview is True, "Up next is untouched"
+    store.render_preview_soon.assert_not_called()
+
+
+def test_a_flash_window_with_nothing_waiting_redraws_without_rendering(tmp_path):
+    store = _pending_frame(tmp_path)
+    store.note_panel_fetch(2)
+    store.render_preview_soon.reset_mock()
+    reply = _wake(store, 60)
+    assert reply["draw"] is True
+    assert reply["generation"] == 2
+    store.rotate.assert_not_called()
+
+
+def test_a_flash_window_is_the_threshold_the_button_sets():
+    """The HA script sets 300; the renderer's line must sit below that and
+    well above the 20-second default, or the button opens nothing."""
+    import app
+    assert 20 < app.FLASH_WINDOW_SECONDS <= 300

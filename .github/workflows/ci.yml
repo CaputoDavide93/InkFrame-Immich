@@ -7,33 +7,42 @@ on:
   schedule:
     - cron: "0 6 * * 1"   # weekly: hassfest and HACS rules change under us
 
+# Every job only reads the repository. Actions are pinned to full commit SHAs,
+# with the tag or branch each was taken from in its comment, so what runs here
+# changes only in a reviewed commit. Dependabot proposes new tagged pins; the
+# two branch pins (hassfest, HACS) are moved by hand.
+permissions:
+  contents: read
+
 jobs:
   renderer:
     name: Renderer tests and generated docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install -r server/requirements.txt pytest
       - run: python -m pytest server/tests -q
       - name: Generated tables match the code
         run: python tools/gen_docs.py --check
+      - name: Diagrams match the generator
+        run: python tools/gen_diagram.py --check
 
   hassfest:
     name: Home Assistant hassfest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: home-assistant/actions/hassfest@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: home-assistant/actions/hassfest@cd6f3635a740c84d8a14f6121a90068b8ece6bf6 # master, 2026-10-24
 
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: hacs/action@main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main, 2026-10-24
         with:
           category: integration
           # The domain is not yet in home-assistant/brands; that is a separate
@@ -44,8 +53,8 @@ jobs:
     name: ESPHome config validates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install esphome
