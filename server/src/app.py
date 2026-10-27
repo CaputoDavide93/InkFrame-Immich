@@ -77,8 +77,68 @@ PEOPLE_RETRY_MAX_SECONDS = 15 * 60
 # picture does not change, the schedule does not move, and the panel stays up
 # for the window.
 FLASH_WINDOW_SECONDS = 60
-HEARTBEAT = os.environ.get("HEARTBEAT_FILE", "/tmp/immichframe-heartbeat")
+# WAKE ON THE SCHEDULE'S CLOCK, NOT THE PANEL'S (2026-10-26).
+# `sleep_seconds` used to be the bare interval, so the checks were a
+# free-running timer that walked around the clock: 06:57, 12:54, 18:50,
+# 00:46, 06:42. The 06:42 check was told "next draw 07:00" and slept six
+# hours, so the 07:00 photo went up at about 12:40. Now every wake sleeps
+# until the next SLOT: wall-clock times anchored on the draw hour (07:00,
+# 13:00, 19:00, 01:00 at six hours), worked out in local time so a clock
+# change moves nothing.
+#
+# The panel's deep-sleep clock runs FAST, about 1.1 % (measured 25-26 Oct
+# 2026: six commanded hours came back as 5 h 56 min). So the sleep is
+# stretched by RTC_FAST_ALLOWANCE and a margin is added on top, to land just
+# after a slot rather than just before it. A wake that still lands early is
+# the cheap failure: the next slot is minutes away, so it naps until then
+# instead of sleeping a whole interval past the draw.
+CHECK_MARGIN_SECONDS = 60
+RTC_FAST_ALLOWANCE = 0.015
+MIN_SLEEP_SECONDS = 60
+HEARTBEAT =os.environ.get("HEARTBEAT_FILE", "/tmp/immichframe-heartbeat")
 LAST_OK = os.environ.get("LAST_OK_FILE", "/tmp/immichframe-render-ok")
+
+
+def _wall_clock(day: dt.date, minute: int) -> dt.datetime:
+    """`minute` past midnight on `day`, local wall clock, with the offset true
+    on that date. A time the spring change skips moves forward an hour."""
+    return dt.datetime.combine(day, dt.time(minute // 60, minute % 60)).astimezone()
+
+
+def sleep_until_next_check(now: dt.datetime, interval_h: float, refresh_hour: int,
+                           due: dt.datetime | None = None) -> int:
+    """Seconds the panel should sleep so it wakes just after the next slot.
+
+    `now` is aware local time. Under a day, the slots are every `interval_h`
+    from `refresh_hour`, so the draw hour is always one of them and the
+    next slot is never further than the interval (plus an hour on the night
+    the clocks go back). From a day up, the slots are `refresh_hour` each day:
+    the latest within the interval, but never past the draw that is `due`.
+    """
+    interval_s = max(1.0, float(interval_h)) * 3600
+    step = max(1, round(float(interval_h) * 60))
+    anchor = (int(refresh_hour) % 24) * 60
+    minutes = range(anchor % step, 1440, step) if step < 1440 else [anchor]
+    today = now.date()
+    slots = sorted({_wall_clock(today + dt.timedelta(days=d), m)
+                    for d in range(-1, int(interval_s // 86400) + 3) for m in minutes})
+    slots = [s for s in slots if s > now]
+    if step < 1440:
+        chosen = slots[0]
+    else:
+        within = [s for s in slots if (s - now).total_seconds() <= interval_s]
+        chosen = within[-1] if within else slots[0]
+        if due is not None:
+            draw = next((s for s in slots if s >= due), None)
+            if draw is not None and draw < chosen:
+                chosen = draw
+    gap = (chosen - now).total_seconds()
+    sleep = gap * (1 + RTC_FAST_ALLOWANCE) + CHECK_MARGIN_SECONDS
+    # A grid that does not divide the day can leave a long gap overnight; the
+    # interval (plus the clock-change hour) stays the ceiling, and the wake
+    # after that one is back on the grid.
+    ceiling = (interval_s + 3600) * (1 + RTC_FAST_ALLOWANCE) + CHECK_MARGIN_SECONDS
+    return int(max(MIN_SLEEP_SECONDS, min(sleep, ceiling)))
 
 
 def _read_renderer_token() -> str:
@@ -140,9 +200,10 @@ SETTING_SPEC: dict[str, tuple[type, float, float, object]] = {
     # a draw every third day is ~40s awake per day; drawing every 8 hours is
     # ~105s.
     "refresh_days": (int, 1, 30, int(os.environ.get("REFRESH_DAYS", "3"))),
-    # Local hour for the scheduled draw. The panel wakes on its own timer and
-    # deep sleep drifts, so this is "the first check at or after this hour",
-    # never an exact alarm.
+    # Local hour for the scheduled draw, and the anchor of the check slots:
+    # /wake sleeps the panel until the next slot, so a check lands just after
+    # this hour on the draw day. Still "the first check at or after this
+    # hour": a panel that wakes late draws late rather than not at all.
     "refresh_hour": (int, 0, 23, int(os.environ.get("REFRESH_HOUR", "7"))),
 }
 
@@ -688,6 +749,26 @@ class FrameStore:
             return "unknown (nothing collected yet)"
         return f"{due:%a %d %b %H:%M}"
 
+    def next_sleep_seconds(self, drawing: bool = False,
+                           now: dt.datetime | None = None) -> int:
+        """The `sleep_seconds` for this wake: until the next slot.
+
+        A DRAWING wake has not been collected yet when /wake answers, so
+        `fetched_at` still points at the last draw and the due date it gives
+        is today's. Plan from the draw happening now instead, the same date
+        arithmetic `_refresh_due_at` will do once the panel acknowledges it.
+        """
+        cfg = self.source.settings
+        now = now or dt.datetime.now().astimezone()
+        hour = int(cfg.get("refresh_hour", 7))
+        if drawing:
+            days = int(cfg.get("refresh_days", 3))
+            due = dt.datetime.combine(now.date() + dt.timedelta(days=days),
+                                      dt.time(hour)).astimezone()
+        else:
+            due = self._refresh_due_at()
+        return sleep_until_next_check(now, float(cfg.get("sleep_hours", 6)), hour, due)
+
     def rotate(self, preview: bool = False) -> int:
         """Render the next photo; `preview` holds it for the scheduled draw.
 
@@ -1228,7 +1309,7 @@ class Handler(BaseHTTPRequestHandler):
                          "panel holds it", cfg["ota_window_seconds"], generation)
                 self._json(200, {"generation": generation, "bytes": FRAME_BYTES,
                                  "draw": True,
-                                 "sleep_seconds": int(float(cfg["sleep_hours"]) * 3600),
+                                 "sleep_seconds": store.next_sleep_seconds(),
                                  "ota_window_seconds": int(cfg["ota_window_seconds"])})
                 return
             if draw and not pending:
@@ -1251,7 +1332,7 @@ class Handler(BaseHTTPRequestHandler):
                          store.next_refresh_description())
             self._json(200, {"generation": generation, "bytes": FRAME_BYTES,
                              "draw": draw,
-                             "sleep_seconds": int(float(cfg["sleep_hours"]) * 3600),
+                             "sleep_seconds": store.next_sleep_seconds(drawing=draw),
                              "ota_window_seconds": int(cfg["ota_window_seconds"])})
             return
 

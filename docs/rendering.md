@@ -11,7 +11,7 @@ Immich has already detected.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/portrait-crop-dark.svg">
-  <img src="assets/portrait-crop-light.svg" width="100%" alt="A portrait is cropped to 800 by 480: the window is placed on the faces Immich found, or centred and biased above the middle.">
+  <img src="assets/portrait-crop-light.svg" width="100%" alt="A portrait is cropped to 800 by 480: the window is placed on the faces Immich found, or centred and biased above the middle when there are none.">
 </picture>
 
 Where the face sits vertically depends on how much of the window it fills:
@@ -45,7 +45,7 @@ Set `landscape_only` (**Portraits** in Home Assistant) to keep skipping them.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/selection-pipeline-dark.svg">
-  <img src="assets/selection-pipeline-light.svg" width="100%" alt="A hundred random assets are filtered by orientation, then by whether a camera took them, then twenty are downloaded and scored and the calmest is rendered.">
+  <img src="assets/selection-pipeline-light.svg" width="100%" alt="Random assets come from Immich a hundred at a time, are filtered by orientation and then by whether a camera took them, then twenty are downloaded and scored for busyness, and a calm one is rendered.">
 </picture>
 
 ### Landscape by orientation
@@ -73,7 +73,7 @@ This filter earns its place because the busyness score alone promotes exactly th
 
 Mean absolute Laplacian over the cropped, greyscale 800x480 frame. Fine texture everywhere, grass, foliage, gravel, scores high and collapses into visible dot noise under every dithering algorithm tried: Floyd-Steinberg, ordered Bayer, clustered-dot halftone, with and without tone curves. A subject against a plain background scores low and survives all of them.
 
-Measured range on a real library: 2.7 to 59.5. The default threshold `MAX_BUSYNESS` is 22. The renderer downloads and scores twenty candidates and shows the calmest; if every one is above the threshold it still shows the calmest and says so in `/status`, because a speckly photo beats last week's photo left up for ever.
+Measured range on a real library: 2.7 to 59.5. The default threshold `MAX_BUSYNESS` is 22. The renderer downloads and scores twenty candidates and shows a random one at or under the threshold, so the same few calm photos do not win every draw; if every one is above the threshold it shows the calmest and says so in `/status`, because a speckly photo beats last week's photo left up for ever.
 
 The score is resolution-independent within about 50%, which `tests/test_frame.py` checks, so Immich's varying preview sizes do not move the threshold. Do not change the scoring resolution to save time: the threshold is calibrated against 800x480 scores and would silently recalibrate.
 

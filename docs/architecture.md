@@ -4,7 +4,7 @@ Three parts, one of which is asleep almost all the time.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/topology-dark.svg">
-  <img src="assets/topology-light.svg" width="100%" alt="Immich, the renderer and Home Assistant are always on; the panel wakes about thirty-five seconds a week.">
+  <img src="assets/topology-light.svg" width="100%" alt="Immich, the renderer and Home Assistant are always on; the panel sleeps between wakes and is awake about 7 seconds to check and 35 to draw.">
 </picture>
 
 ## Why the renderer exists
@@ -15,13 +15,13 @@ So the renderer does every expensive step and serves a frame that is already exa
 
 ## Why the panel talks to the renderer and not to Home Assistant
 
-The panel sleeps for all but about 35 seconds a week. Home Assistant cannot push to a device that has no network stack, and a device that polls Home Assistant would need Home Assistant's API to hold everything about photo selection. The renderer is the one always-on component that knows the library, so both the panel and Home Assistant talk to it.
+The panel sleeps between wakes, awake about 7 seconds to check and about 35 to draw. Home Assistant cannot push to a device that has no network stack, and a device that polls Home Assistant would need Home Assistant's API to hold everything about photo selection. The renderer is the one always-on component that knows the library, so both the panel and Home Assistant talk to it.
 
 ## The wake protocol
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/wake-states-dark.svg">
-  <img src="assets/wake-states-light.svg" width="100%" alt="Boot, connect, call /wake, fetch the frame, draw it, hold an OTA window, then deep sleep until the timer fires and it boots again.">
+  <img src="assets/wake-states-light.svg" width="100%" alt="Boot, connect and call /wake. On a draw: fetch the frame, draw it, acknowledge it and hold the OTA window. On a check: go straight to deep sleep. Either way the timer fires at the next clock slot and it boots again.">
 </picture>
 
 `/wake` does two things in one call.

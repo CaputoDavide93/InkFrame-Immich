@@ -42,7 +42,7 @@ unknown and `Up next` claimed something was waiting, while the wall had not
 changed.
 
 **A restart does not consume a photo.** If a frame was restored, start-up keeps
-it rather than rendering a new one. Otherwise a weekly frame would rotate every
+it rather than rendering a new one. Otherwise a frame that changes every few days would rotate every
 time the container was rebuilt, and the panel would be a generation behind from
 the moment it came back.
 

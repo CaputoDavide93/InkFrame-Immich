@@ -6,14 +6,14 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/firmware-flow-dark.svg">
-  <img src="assets/firmware-flow-light.svg" width="100%" alt="Boot, connect to Wi-Fi, call /wake and store the reply or keep the fallback values, fetch the frame with one retry, draw it, hold the OTA window, then sleep unless Stay awake is on.">
+  <img src="assets/firmware-flow-light.svg" width="100%" alt="Boot, connect to Wi-Fi and call /wake, storing the reply or keeping the fallbacks. If told to draw: fetch the frame with one retry, update the display, acknowledge it and hold the OTA window. Then sleep unless Stay awake is on.">
 </picture>
 
 **The fetch fires on `wifi.on_connect`, not a fixed boot delay.** The only thing it needs is an IP address. A fixed delay long enough to be safe was twelve seconds of dead waiting on every wake.
 
-**One retry.** A fetch that fails leaves last week's photo on the glass, which looks exactly like success, and nothing would try again for a week. So the firmware retries once inside the wake window.
+**One retry.** A fetch that fails leaves the previous photo on the glass, which looks exactly like success, and nothing would try again until the next wake. So the firmware retries once inside the wake window.
 
-**`run_duration` is a backstop, not a target.** It is set to 120 seconds so that a wake whose fetch fails twice still sleeps instead of sitting awake flattening the cell. The normal path sleeps at about 35 seconds.
+**`run_duration` is a backstop, not a target.** It is set to 300 seconds so that a wake whose fetch fails twice still sleeps instead of sitting awake flattening the cell. The normal path sleeps at about 35 seconds.
 
 ## Sleep interval and OTA window come from the server
 
@@ -23,7 +23,7 @@ Set them from Home Assistant as **Sleep interval** and **OTA window**. A change 
 
 ## The Stay awake switch
 
-A flash-backed template switch. While it is on, the panel does not sleep. It is the only way to get more than one OTA window a week, and you turn it on from Home Assistant during a wake window.
+A flash-backed template switch. While it is on, the panel does not sleep. It is the only way to get more than one OTA window between wakes, and you turn it on from Home Assistant during a wake window.
 
 The guard around `deep_sleep.enter` is load-bearing:
 
@@ -75,7 +75,7 @@ A check wake lasts about seven seconds and holds no OTA window: the window is th
    esphome upload firmware/immich-frame.yaml --device <panel-ip>
    ```
 
-3. Wait for the next check: **Last check-in** plus **Sleep interval**. The firmware's `run_duration` backstop sleeps the panel 300 seconds after boot whatever the window says, so start the upload within about four minutes of the check-in.
+3. Wait for the next check: the next slot after **Last check-in** (see [Wake and sleep](wake-and-sleep.md#when-it-wakes)), never later than **Last check-in** plus **Sleep interval**. The firmware's `run_duration` backstop sleeps the panel 300 seconds after boot whatever the window says, so start the upload within about four minutes of the check-in.
 4. Set **OTA window** back to what it was (20 seconds by default). Left at 300, every wake redraws and holds five minutes awake, and the battery pays for it.
 5. Confirm the new build: the panel's ESPHome entities come back with the next wake, and **Last check-in** keeps moving.
 

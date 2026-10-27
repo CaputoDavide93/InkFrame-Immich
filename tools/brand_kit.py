@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Brand kit, trimmed to this project: the icon tile and the 1280x640 social preview.
+"""Brand kit, trimmed to this project: the 1280x640 social preview.
 
-  python3 tools/brand_kit.py icon   --out docs/assets/brand [--sizes 256]
   python3 tools/brand_kit.py social --out docs/assets/social-preview.png
 
-The tile is a 1024 px rounded square (22 percent corners) with a single-hue
-vertical gradient and a near-white glyph at a 61 px stroke. No text, no shadow.
-Needs headless Google Chrome (set CHROME= if it is elsewhere) and Pillow.
+The preview carries InkFrame's own icon, brand/icon@2x.png from gen_brand.py,
+already rounded and transparent at the corners, on a background in the hue of
+that icon's orange dot. Needs headless Google Chrome (set CHROME= if it is
+elsewhere) and Pillow.
 Rendering is deterministic and PNG metadata is stripped.
 """
 import argparse, colorsys, html, os, pathlib, subprocess, sys, tempfile
@@ -15,12 +15,9 @@ from PIL import Image
 CHROME = os.environ.get("CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 INK = "#F8FAFC"
 NAME = "InkFrame-Immich"
-HUE = 121
-TAGLINE = "One good Immich photo a week, on a frame that sleeps for days"
+HUE = 32        # the orange dot on brand/icon.png, (232, 160, 76)
+TAGLINE = "One good Immich photo every few days, on a frame that sleeps between"
 CHIPS = ('7.5" e-paper', "Immich", "Home Assistant", "ESPHome")
-GLYPH = ('<g fill="none" stroke="#F8FAFC" stroke-width="61" stroke-linecap="round" stroke-linejoin="round">'
-         '<rect x="262" y="300" width="500" height="424" rx="40"/></g>'
-         '<g fill="#F8FAFC" opacity="1"><rect x="390" y="415" width="244" height="194" rx="16"/></g>')
 
 # ---- colour -----------------------------------------------------------------
 def _lum(rgb):
@@ -61,32 +58,8 @@ def render(html_doc, w, h, out, transparent=False):
     clean.save(out, optimize=True)
     return clean
 
-def icon_svg(glyph_fragment, hue):
-    top, bot, _ = palette(hue)
-    gid = f"g{hue}"
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">'
-            f'<defs><linearGradient id="{gid}" x1="0" y1="0" x2="0" y2="1">'
-            f'<stop offset="0" stop-color="{top}"/><stop offset="1" stop-color="{bot}"/></linearGradient></defs>'
-            f'<rect width="1024" height="1024" rx="225" fill="url(#{gid})"/>\n{glyph_fragment.strip()}\n</svg>\n')
-
-def make_icon(glyph_svg_fragment, hue, out_svg, out_png_sizes=(256,)):
-    """glyph fragment is drawn in a 1024 space; out_png_sizes -> files icon-<n>.png beside out_svg
-    (a dict {size: path} is also accepted)."""
-    out_svg = pathlib.Path(out_svg).resolve(); out_svg.parent.mkdir(parents=True, exist_ok=True)
-    svg = icon_svg(glyph_svg_fragment, hue); out_svg.write_text(svg)
-    sizes = out_png_sizes if isinstance(out_png_sizes, dict) else {n: out_svg.parent / f"icon-{n}.png" for n in out_png_sizes}
-    if sizes:
-        big = render(f'<body style="margin:0;background:transparent"><img src="file://{out_svg}" width=1024 height=1024 style="display:block">',
-                     1024, 1024, out_svg.parent / ".icon-1024.tmp.png", transparent=True)
-        (out_svg.parent / ".icon-1024.tmp.png").unlink()
-        for n, path in sizes.items():
-            c = big.resize((int(n), int(n)), Image.LANCZOS)
-            pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
-            c.save(path, optimize=True)
-    return svg
-
-def make_social(name, tagline, chips, icon_svg_path, hue, out_png):
-    """1280x640, tile left, name, tagline, chips, hue stripe. Same layout for every repo."""
+def make_social(name, tagline, chips, icon_path, hue, out_png):
+    """1280x640, icon left, name, tagline, chips, hue stripe."""
     top, bot, mid = palette(hue); d1, d2 = dark_bg(hue)
     chips = list(chips)[:4]
     chip_html = "".join(f'<span class="c{" f" if i == 0 else ""}">{html.escape(c)}</span>' for i, c in enumerate(chips))
@@ -94,7 +67,7 @@ def make_social(name, tagline, chips, icon_svg_path, hue, out_png):
 *{{box-sizing:border-box;margin:0}}
 body{{width:1280px;height:640px;overflow:hidden;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:{INK};
  background:radial-gradient(900px 600px at 18% 45%,{mid}33,transparent 70%),linear-gradient(135deg,{d1},{d2});position:relative}}
-.tile{{position:absolute;left:98px;top:170px;width:300px;height:300px;border-radius:22%;box-shadow:0 0 0 2px #ffffff1f}}
+.icon{{position:absolute;left:98px;top:170px;width:300px;height:300px}}
 .txt{{position:absolute;left:480px;top:0;width:740px;height:632px;display:flex;flex-direction:column;justify-content:center}}
 h1{{font-weight:800;letter-spacing:-.025em;line-height:1.02;white-space:nowrap;font-size:96px;margin-bottom:26px}}
 h1.wrap{{white-space:normal;font-size:68px;overflow-wrap:anywhere}}
@@ -103,7 +76,7 @@ p{{font-size:35px;line-height:1.28;font-weight:600;color:#E3E6EBd9;margin-bottom
 .c{{font-weight:700;font-size:23px;padding:11px 22px;border-radius:99px;border:2px solid #ffffff33;color:#F1F3F6}}
 .c.f{{background:linear-gradient(180deg,{top},{bot});border-color:transparent;color:#fff}}
 .bar{{position:absolute;left:0;right:0;bottom:0;height:8px;background:linear-gradient(90deg,{top},{bot})}}
-</style><img class=tile src="file://{pathlib.Path(icon_svg_path).resolve()}">
+</style><img class=icon src="file://{pathlib.Path(icon_path).resolve()}">
 <div class=txt><h1 id=n>{html.escape(name)}</h1><p>{html.escape(tagline)}</p><div class=chips>{chip_html}</div></div><div class=bar></div>
 <script>const h=document.getElementById('n');let s=96;while(h.scrollWidth>740&&s>60){{s-=2;h.style.fontSize=s+'px'}}
 if(h.scrollWidth>740){{h.className='wrap';h.innerHTML=h.textContent.replace(/-/g,'-<wbr>')}}</script>'''
@@ -113,14 +86,10 @@ if(h.scrollWidth>740){{h.className='wrap';h.innerHTML=h.textContent.replace(/-/g
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    a = sub.add_parser("icon"); a.add_argument("--out", default="docs/assets/brand"); a.add_argument("--sizes", default="256")
-    b = sub.add_parser("social"); b.add_argument("--icon", default="docs/assets/brand/icon.svg")
+    b = sub.add_parser("social"); b.add_argument("--icon", default="brand/icon@2x.png")
     b.add_argument("--out", default="docs/assets/social-preview.png")
     n = ap.parse_args(argv)
-    if n.cmd == "icon":
-        make_icon(GLYPH, HUE, pathlib.Path(n.out) / "icon.svg", [int(x) for x in n.sizes.split(",") if x])
-    else:
-        make_social(NAME, TAGLINE, CHIPS, n.icon, HUE, n.out)
+    make_social(NAME, TAGLINE, CHIPS, n.icon, HUE, n.out)
 
 if __name__ == "__main__":
     sys.exit(main())

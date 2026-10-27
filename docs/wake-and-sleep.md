@@ -118,9 +118,41 @@ tune. It is stored in flash and survives deep sleep.
 Turn it **off** when you are done. On a battery frame with no battery sensor,
 leaving it on drains the cell with no warning at all.
 
+## When it wakes
+
+The panel does not count six hours from whenever it last woke. Each `/wake`
+reply carries `sleep_seconds` **until the next slot**: wall-clock times
+anchored on the draw hour. At a 6-hour interval and a 07:00 draw the slots are
+01:00, 07:00, 13:00 and 19:00, so the draw-day check lands at about 07:01 and
+draws then.
+
+Until 26 Oct 2026 the reply was the bare interval, and the checks walked
+around the clock: 06:57, 12:54, 18:50, 00:46, 06:42. The 06:42 check was told
+"next draw 07:00" and slept six hours, so the 07:00 photo went up at 12:40.
+
+- **The panel's clock runs fast.** Six commanded hours came back as 5 h 56
+  min, about 1.1 %. The renderer stretches every sleep by 1.5 % and adds a
+  minute, so the panel lands just after a slot, not just before it.
+- **An early landing costs a nap, not a slot.** A check that still arrives
+  before its slot is sent back to sleep until it, a few minutes, then checks
+  again.
+- **Clock changes move nothing.** Slots are local wall-clock times with the
+  offset true on that date, so 07:00 is 07:00 GMT in winter and 07:00 BST in
+  summer. On the night the clocks go back one sleep runs an hour longer.
+- **Intervals of a day or more** wake at the draw hour: the latest one inside
+  the interval, but never past the next draw. At 168 hours with a 3-day draw
+  the panel wakes on draw mornings only.
+- **An interval that does not divide the day** (5 h, 10 h) keeps the draw hour
+  on the grid; the overnight gap is capped at the interval plus an hour.
+
+No firmware change was needed: the firmware has always slept for whatever
+`sleep_seconds` says. The renderer deploys on merge; the next check-in
+after that is the first on the grid.
+
 ## Changing the cadence
 
-`number.inkframe_sleep_interval`, 1 to 336 hours. The renderer delivers it on
-the next `/wake`, so it takes effect one wake later, never immediately. The
+`number.inkframe_sleep_interval`, 1 to 336 hours: the longest the panel
+sleeps, and the spacing of the slots. The renderer delivers it on the next
+`/wake`, so it takes effect one wake later, never immediately. The
 firmware's own value is only a fallback for a wake where `/wake` could not be
 reached.

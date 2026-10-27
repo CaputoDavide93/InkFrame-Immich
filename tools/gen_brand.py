@@ -6,11 +6,11 @@
   brand/logo.png       1024x256  wordmark
   brand/logo@2x.png    2048x512  hDPI wordmark, for home-assistant/brands
   docs/assets/demo.png           a synthetic scene beside its one-bit render
-  docs/assets/brand/icon.svg     the family tile, drawn by brand_kit.py (README header)
   docs/assets/social-preview.png 1280x640 from brand_kit.py, uploaded by hand in the repository settings
 
-brand/ is what the product and HACS ship and stays as drawn here; the tile and
-the social preview come from the shared kit in brand_kit.py (needs headless Chrome).
+brand/ is what the product, HACS and the README header show, and stays as drawn
+here; the social preview puts brand/icon@2x.png into the layout in brand_kit.py
+(needs headless Chrome).
 
 The demo is deliberately synthetic. The real frames this was built on are
 family photographs, and a public repository is not the place for them; a
@@ -155,7 +155,7 @@ def logo(scale: int = 1) -> Image.Image:
     d = ImageDraw.Draw(img)
     f1, f2 = _font(int(h * 0.42)), _font(int(h * 0.17))
     d.text((h + 40, h * 0.18), "InkFrame", fill=INK, font=f1)
-    d.text((h + 44, h * 0.66), "one good photo a week, from Immich", fill=(90, 90, 90), font=f2)
+    d.text((h + 44, h * 0.66), "one good photo every few days, from Immich", fill=(90, 90, 90), font=f2)
     return img
 
 
@@ -213,11 +213,10 @@ def main() -> None:
     logo(2).save(ROOT / "brand" / "logo@2x.png")
     demo().save(ROOT / "docs" / "assets" / "demo.png", optimize=True)
     import brand_kit
-    brand_kit.main(["icon", "--out", str(ROOT / "docs" / "assets" / "brand")])
-    brand_kit.main(["social", "--icon", str(ROOT / "docs" / "assets" / "brand" / "icon.svg"),
+    brand_kit.main(["social", "--icon", str(ROOT / "brand" / "icon@2x.png"),
                     "--out", str(ROOT / "docs" / "assets" / "social-preview.png")])
     print("brand/icon.png brand/icon@2x.png brand/logo.png brand/logo@2x.png "
-          "docs/assets/demo.png docs/assets/brand/icon.svg docs/assets/social-preview.png")
+          "docs/assets/demo.png docs/assets/social-preview.png")
 
 
 if __name__ == "__main__":

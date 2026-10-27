@@ -1,7 +1,7 @@
 """Two pictures: what is on the glass, and what is waiting to replace it.
 
 They are usually the same. They differ from the moment a new photo is rendered
-until the panel next wakes and collects it, which on a weekly cycle can be days
+until the panel next wakes and collects it, which on a multi-day cycle can be days
 -- and that gap is the whole reason for having two. E-paper holds its last
 image with no power, so nothing about the wall tells you a newer photo exists.
 """

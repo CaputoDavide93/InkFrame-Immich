@@ -33,7 +33,7 @@ Check `On panel` in Home Assistant, or `on_panel` in `/status`.
 
 | `on_panel` | Rendered generation | Meaning |
 |---|---|---|
-| true | unchanged for a week | The panel acknowledged the current generation. Check the configured refresh interval and renderer `wake:` logs |
+| true | unchanged for longer than **Photo every** | The panel acknowledged the current generation. Check the configured refresh interval and renderer `wake:` logs |
 | false | advanced | A newer frame has not been acknowledged. Check wake, download, display-driver and acknowledgement failures; `Last panel fetch` records the last acknowledged draw |
 | false | unchanged | The renderer has not been asked to render. Nothing called `/wake` or `/next` |
 

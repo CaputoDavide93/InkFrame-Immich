@@ -18,6 +18,13 @@ All notable changes to this project are recorded here. The format follows
   `permissions: contents: read` and runs every action at a full commit SHA.
 
 ### Fixed
+- **The panel wakes in step with the schedule.** `/wake` used to send the bare
+  sleep interval, so the checks drifted around the clock, and a check a few
+  minutes before the draw hour slept a whole interval past it. It now sends
+  the time to the next check slot, anchored on `refresh_hour` in local time
+  (01:00, 07:00, 13:00, 19:00 at six hours), stretched for a deep-sleep clock
+  that runs fast. A long interval wakes on the draw morning instead of
+  sleeping past it. No firmware change.
 - **Every setting in `.env` reaches the renderer.** `docker-compose.yml`
   passed only some of the variables `.env.example` lists, so the rest (such as
   `MIN_PERSON_PHOTOS`, `REQUIRE_CAMERA`, `SLEEP_HOURS`, `REFRESH_DAYS` and
@@ -27,6 +34,9 @@ All notable changes to this project are recorded here. The format follows
   on them.
 
 ### Changed
+- **The README and the social preview show InkFrame's own icon again**, the
+  paper frame from `brand/icon.png`, in place of the green tile with a frame
+  glyph. The tile and its generator are gone.
 - **A long OTA window holds on a check, too.** With `ota_window_seconds` at 60
   or more, `/wake` answers `draw: true` with the generation already on the
   glass, so a check redraws the same photo and the panel holds the window.

@@ -32,11 +32,15 @@ No. The panel is in deep sleep between wakes: its radio is off and nothing on th
 
 ### Why did my change not appear on the frame?
 
-A change made in Home Assistant is stored on the renderer and reaches the glass at the panel's next wake, and a photo changes only when a draw is due. By default the panel wakes every 168 hours and draws every 3 days, so the photo changes about weekly. **Next photo** picks a different photo for the scheduled draw rather than drawing now.
+A change made in Home Assistant is stored on the renderer and reaches the glass at the panel's next wake, and a photo changes only when a draw is due. **Next photo** picks a different photo for the scheduled draw rather than drawing now.
 
 ### How often does the photo change?
 
-By default about once a week. The panel wakes every **Sleep interval** hours (168 by default) and draws on that wake if **Photo every** days (3 by default) have passed since the last draw. Both are settings in Home Assistant, so changing them needs no reflash. See [Wake and sleep](wake-and-sleep.md).
+<!-- AUTOGEN:cadence -->
+By default the renderer draws a new photo every 3 days at 07:00 (Photo every and Photo hour). With the default Sleep interval of 168 h the panel wakes on those mornings only. A shorter Sleep interval adds checks on a fixed clock grid anchored on the draw hour: 6 h gives 01:00, 07:00, 13:00 and 19:00. A check takes about 7 seconds awake and a draw about 35.
+<!-- /AUTOGEN:cadence -->
+
+Both the interval and the draw schedule are settings in Home Assistant (**Sleep interval**, **Photo every**, **Photo hour**), so changing them needs no reflash. See [Wake and sleep](wake-and-sleep.md).
 
 ### How do I put a new photo up right now?
 
@@ -44,7 +48,7 @@ Ask the renderer for one and wake the panel. Call `/next?now=1` on the renderer 
 
 ### How long does the battery last?
 
-Seeed rate the 2000 mAh cell at about three months when refreshing every six hours. With the defaults the panel is awake about 35 seconds a week, so the limit becomes the cell's own discharge; expect many months and measure your own. The panel has no battery sensor: the cell's voltage is not wired to the ESP32 on this board, so charge cannot be read in software. See [Hardware](hardware.md#battery).
+Seeed rate the 2000 mAh cell at about three months when refreshing every six hours. Awake time is about 35 seconds for each draw and 7 for each check, so the limit becomes the cell's own discharge; expect many months and measure your own. The panel has no battery sensor: the cell's voltage is not wired to the ESP32 on this board, so charge cannot be read in software. See [Hardware](hardware.md#battery).
 
 ### How do I know whether the frame is working?
 
@@ -58,7 +62,7 @@ The panel's chip, an ESP32-C3, has no PSRAM and about 200 KB of heap, so it cann
 
 ### Which photos does it pick?
 
-Landscape photos taken by a camera that are calm enough to dither well. It filters by EXIF orientation, by whether the EXIF `make` is set, and by a texture score, then downloads twenty candidates and renders the calmest. See [Rendering](rendering.md).
+Landscape photos taken by a camera that are calm enough to dither well. It filters by EXIF orientation, by whether the EXIF `make` is set, and by a texture score, then downloads twenty candidates and renders a random one that is calm enough, or the calmest when none is. See [Rendering](rendering.md).
 
 ### Can I choose people, an album or a pet?
 

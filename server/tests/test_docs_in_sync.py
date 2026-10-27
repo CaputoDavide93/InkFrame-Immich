@@ -101,3 +101,22 @@ def test_generated_tables_match_the_code():
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cadence_is_generated_and_nothing_claims_weekly(gen_docs):
+    """The frame draws every `refresh_days` days (3 by default), not weekly.
+
+    Three pages said "about weekly" for weeks while the defaults drew every
+    third day, because the number was typed by hand. The sentence is generated
+    from the defaults in SETTING_SPEC; `--check` keeps README, the FAQ and
+    llms.txt on it, and this pins that the sentence reads the code (change a
+    default and it changes) and that the tagline claims no weekly cadence.
+    """
+    source = gen_docs.APP.read_text()
+    assert "every 3 days at 07:00" in gen_docs.cadence(source)
+    changed = source.replace('"REFRESH_DAYS", "3"', '"REFRESH_DAYS", "5"')
+    assert changed != source and "every 5 days" in gen_docs.cadence(changed)
+    root = gen_docs.ROOT
+    for page in (root / "README.md", gen_docs.LLMS):
+        head = page.read_text(encoding="utf-8")[:900].lower()
+        assert "a week" not in head and "each week" not in head, page.name

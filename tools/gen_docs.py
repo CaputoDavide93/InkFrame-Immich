@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Regenerate the inventory tables in the docs from the code.
 
-Hand-typed tables drift. Four of them here have a machine source of truth:
+Hand-typed tables drift. Five of them here have a machine source of truth:
 
   env       every os.environ.get(...) in server/src/app.py
   settings  SETTING_SPEC in server/src/app.py
   endpoints handler routes and HTTP methods, including nested paths and groups
   modes     Source.VALID in server/src/app.py, the photo sources
+  cadence   one sentence on how often it draws and checks, from the defaults
+            of refresh_days, refresh_hour and sleep_hours in SETTING_SPEC
 
 Each lands between <!-- AUTOGEN:name --> and <!-- /AUTOGEN:name --> markers.
 `--check` exits 1 if any file would change, for CI.
@@ -23,7 +25,12 @@ APP = ROOT / "server" / "src" / "app.py"
 if not APP.exists():  # running inside the source monorepo, before export
     APP = ROOT / "src" / "app.py"
 
-TARGETS = [ROOT / "README.md", ROOT / "docs" / "api.md", ROOT / "docs" / "home-assistant.md"]
+TARGETS = [ROOT / "README.md", ROOT / "docs" / "api.md", ROOT / "docs" / "home-assistant.md",
+           ROOT / "docs" / "faq.md"]
+# llms.txt is plain text for search engines, so it carries the cadence as one
+# bullet rather than between HTML comment markers. Flat layout in the monorepo.
+LLMS = next((p for p in (ROOT / "llms.txt", ROOT / "public" / "llms.txt") if p.exists()), None)
+CADENCE_BULLET = "- Cadence: "
 
 # Endpoint descriptions are prose and stay hand-written -- but a route with no
 # description, or a description for a route that no longer exists, fails the
@@ -31,7 +38,7 @@ TARGETS = [ROOT / "README.md", ROOT / "docs" / "api.md", ROOT / "docs" / "home-a
 ENDPOINTS = {
     "/healthz": "Unauthenticated liveness only; carries `generation` but no photo or state",
     "/status": "Bearer-authenticated state: current photo, source, settings, people, `on_panel`, `last_error`",
-    "/wake": "The panel's wake check; returns `draw`, `generation`, `sleep_seconds` and `ota_window_seconds`. A pending frame is held until its scheduled draw unless requested with `/next?now=1`; an OTA window of 60 s or more makes a check redraw the photo already shown, so the window is held; complete BMP or raw downloads acknowledge legacy firmware until the first valid authenticated POST to `/frame/ack`",
+    "/wake": "The panel's wake check; returns `draw`, `generation`, `sleep_seconds` (to the next check slot, anchored on `refresh_hour`) and `ota_window_seconds`. A pending frame is held until its scheduled draw unless requested with `/next?now=1`; an OTA window of 60 s or more makes a check redraw the photo already shown, so the window is held; complete BMP or raw downloads acknowledge legacy firmware until the first valid authenticated POST to `/frame/ack`",
     "/next": "Pick a different next photo and hold it for the scheduled draw; `?now=1` makes the next check draw it. Home Assistant's button. The panel never calls this",
     "/frame.bmp": "The current or requested `?gen=N` frame as a 1-bit BMP, the format the panel draws. A completed download acknowledges legacy firmware until the first valid authenticated POST to `/frame/ack`, persisted across restarts; after that, downloading does not acknowledge display",
     "/frame.png": "The current or requested `?gen=N` frame as a 1-bit PNG; downloading does not acknowledge display",
@@ -82,7 +89,7 @@ SETTING_NOTES = {
     "max_busyness": "Reject anything scoring above this",
     "require_camera": "Only assets with a camera make in EXIF",
     "landscape_only": "Skip portraits. Off means they are cropped to fit, with the window placed on the faces Immich found",
-    "sleep_hours": "Delivered to the panel on `/wake`",
+    "sleep_hours": "The longest the panel sleeps. `/wake` sends the time to the next check slot, anchored on `refresh_hour`, so checks land on fixed clock times",
     "refresh_days": "How often the picture on the glass actually changes. Most wakes only CHECK (~7s); a draw is ~35s",
     "refresh_hour": "Local hour for the scheduled draw. The first check at or after it, never an exact alarm",
     "ota_window_seconds": "Delivered to the panel on `/wake`. At 60 or more every wake draws the photo already on the glass, because only a drawing wake holds the window; Home Assistant's Prepare for update sets 300 for one wake",
@@ -162,6 +169,47 @@ def settings_table(source: str) -> str:
     if stale:
         sys.exit(f"gen_docs: described settings that no longer exist: {stale}")
     return "\n".join(rows)
+
+
+def _default(node: ast.AST):
+    """The default of a SETTING_SPEC row: a literal, or an os.environ.get default."""
+    for sub in ast.walk(node):
+        if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr == "get" and len(sub.args) > 1):
+            return ast.literal_eval(sub.args[1])
+    return ast.literal_eval(node)
+
+
+def cadence(source: str) -> str:
+    """How often the frame draws and checks, worked out from the code's defaults.
+
+    The README, the FAQ and llms.txt all say this, and it was hand-typed as
+    "about weekly" for weeks while the defaults drew every three days. The
+    slot arithmetic mirrors `sleep_until_next_check`: from a day up the panel
+    wakes on draw mornings only; under a day the slots are every `interval`
+    hours from the draw hour.
+    """
+    values = {}
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "SETTING_SPEC":
+            for key_node, val in zip(node.value.keys, node.value.values):
+                if key_node.value in ("refresh_days", "refresh_hour", "sleep_hours"):
+                    values[key_node.value] = _default(val.elts[3])
+    missing = {"refresh_days", "refresh_hour", "sleep_hours"} - set(values)
+    if missing:
+        sys.exit(f"gen_docs: cannot work out the cadence, no default for {sorted(missing)}")
+    days, hour, sleep = int(values["refresh_days"]), int(values["refresh_hour"]), float(values["sleep_hours"])
+    example = 6
+    slots = sorted((hour + n * example) % 24 for n in range(24 // example))
+    grid = ", ".join(f"{h:02d}:00" for h in slots[:-1]) + f" and {slots[-1]:02d}:00"
+    plural = "day" if days == 1 else "days"
+    wakes = (f"With the default Sleep interval of {sleep:g} h the panel wakes on those mornings only"
+             if sleep >= 24 else
+             f"With the default Sleep interval of {sleep:g} h the panel also checks in between")
+    return (f"By default the renderer draws a new photo every {days} {plural} at {hour:02d}:00 "
+            f"(Photo every and Photo hour). {wakes}. A shorter Sleep interval adds checks "
+            f"on a fixed clock grid anchored on the draw hour: {example} h gives {grid}. "
+            f"A check takes about 7 seconds awake and a draw about 35.")
 
 
 def modes_table(source: str) -> str:
@@ -249,7 +297,8 @@ def main() -> int:
 
     source = APP.read_text()
     tables = {"env": env_table(source), "settings": settings_table(source),
-              "endpoints": endpoints_table(source), "modes": modes_table(source)}
+              "endpoints": endpoints_table(source), "modes": modes_table(source),
+              "cadence": cadence(source)}
     changed = []
     for target in TARGETS:
         if not target.exists():
@@ -262,6 +311,18 @@ def main() -> int:
             changed.append(target)
             if not args.check:
                 target.write_text(after)
+    if LLMS is not None:
+        before = LLMS.read_text()
+        want = CADENCE_BULLET + tables["cadence"]
+        lines = before.split("\n")
+        hits = [i for i, line in enumerate(lines) if line.startswith(CADENCE_BULLET)]
+        if len(hits) != 1:
+            sys.exit(f"gen_docs: {LLMS.name} needs exactly one '{CADENCE_BULLET}' bullet")
+        lines[hits[0]] = want
+        if "\n".join(lines) != before:
+            changed.append(LLMS)
+            if not args.check:
+                LLMS.write_text("\n".join(lines))
     if args.check and changed:
         print("stale generated tables in: " + ", ".join(str(p.relative_to(ROOT)) for p in changed))
         print("run: python tools/gen_docs.py")

@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="docs/assets/brand/icon.svg" alt="InkFrame icon: a green rounded tile with a white photo frame outline around a solid white picture" width="104" height="104">
+<img src="https://raw.githubusercontent.com/CaputoDavide93/InkFrame-Immich/main/brand/icon.png" alt="InkFrame icon: a rounded paper tile holding a black frame with a one-bit landscape, a tree and a white sun, and a small orange dot" width="104" height="104">
 
 # 🖼️ InkFrame for Immich
 
-**Put one well-chosen photo from your Immich library on a battery e-paper frame each week, with the source and the look controlled from Home Assistant**
+**Put one well-chosen photo from your Immich library on a battery e-paper frame every few days, with the source and the look controlled from Home Assistant**
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![ESPHome](https://img.shields.io/badge/ESPHome-2026.9-000000?logo=esphome&logoColor=white)
@@ -22,6 +22,10 @@
 ## ✨ Features
 
 InkFrame is a free, open-source (MIT) photo frame for a Seeed Studio XIAO 7.5" ePaper Panel. A small server reads your Immich library, picks a landscape photograph that will look good in one bit, renders it to 800x480 and hands the panel a finished frame. The panel wakes, draws, and sleeps for days. A Home Assistant integration chooses where photos come from and shows you what is on the glass and what is waiting.
+
+<!-- AUTOGEN:cadence -->
+By default the renderer draws a new photo every 3 days at 07:00 (Photo every and Photo hour). With the default Sleep interval of 168 h the panel wakes on those mornings only. A shorter Sleep interval adds checks on a fixed clock grid anchored on the draw hour: 6 h gives 01:00, 07:00, 13:00 and 19:00. A check takes about 7 seconds awake and a draw about 35.
+<!-- /AUTOGEN:cadence -->
 
 <div align="center">
 <img src="docs/assets/demo.png" alt="A drawn scene on the left; on the right the same scene after the renderer: 800x480, one bit, dithered" width="100%">
@@ -58,7 +62,7 @@ You need an Immich API key and a shared token first, the hardware, and Docker. T
 | | Feature | What it does |
 |---|---|---|
 | 🧠 | Renderer (`server/`) | Picks a landscape photograph from Immich, crops it to 800x480, tones and dithers it, and serves the frame as PNG, BMP or a raw framebuffer |
-| 🌾 | Photos that suit one bit | Landscape by EXIF orientation, taken by a camera, scored for texture, and the calmest of twenty candidates wins |
+| 🌾 | Photos that suit one bit | Landscape by EXIF orientation, taken by a camera, scored for texture, and one of the calm candidates out of twenty wins |
 | 🖼️ | Portraits cropped, not skipped | A portrait is cropped to the panel with the window placed on the faces Immich found, or skipped if you prefer |
 | 📟 | Firmware (`firmware/`) | ESPHome config for the XIAO panel: wake, fetch, draw, sleep. Sleep interval and OTA window arrive from the server, so changing them needs no reflash |
 | 🏠 | Home Assistant device | Choose the source, tune the render, see the frame before the panel does, and know whether the panel collected it |
@@ -130,11 +134,11 @@ Taken from the real renderer and a real Home Assistant, on drawn demo scenes (`m
 
 The panel never talks to Home Assistant and Home Assistant never talks to the panel. Both talk to the renderer, which is awake all the time. A setting you change in Home Assistant is stored on the renderer and takes effect at the panel's next wake. The one entity that tells you whether a photo actually reached the glass is `On panel`; see [why that matters](docs/home-assistant.md#rendered-is-not-displayed).
 
-The weekly wake, end to end:
+One wake, end to end:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wake-sequence-dark.svg">
-  <img src="docs/assets/wake-sequence-light.svg" width="100%" alt="The panel calls /wake; the renderer rotates to a new photograph or serves the one already rendered, replies with the sleep parameters, serves the frame, and the panel draws it and sleeps.">
+  <img src="docs/assets/wake-sequence-light.svg" width="100%" alt="The panel wakes on a clock slot and calls /wake. The renderer renders a new photo if a draw is due, serves a photo that is already waiting, or keeps the current one. It replies with generation, draw, sleep_seconds and ota_window_seconds. On a draw the panel fetches the 48 KB one-bit BMP, draws it, acknowledges it, holds the OTA window and sleeps; on a check it sleeps straight away.">
 </picture>
 
 [How it works](docs/how-it-works.md) is the short version of the whole system; [Architecture](docs/architecture.md) has the reasoning.
@@ -212,7 +216,7 @@ Every knob has a sensible default. Home Assistant can change the ones marked ✅
 | `max_busyness` | float | 1.0 to 100.0 | Reject anything scoring above this | ✅ |
 | `require_camera` | bool | on / off | Only assets with a camera make in EXIF | ✅ |
 | `landscape_only` | bool | on / off | Skip portraits. Off means they are cropped to fit, with the window placed on the faces Immich found | ✅ |
-| `sleep_hours` | float | 1 to 336 | Delivered to the panel on `/wake` | ✅ |
+| `sleep_hours` | float | 1 to 336 | The longest the panel sleeps. `/wake` sends the time to the next check slot, anchored on `refresh_hour`, so checks land on fixed clock times | ✅ |
 | `ota_window_seconds` | int | 5 to 300 | Delivered to the panel on `/wake`. At 60 or more every wake draws the photo already on the glass, because only a drawing wake holds the window; Home Assistant's Prepare for update sets 300 for one wake | ✅ |
 | `refresh_days` | int | 1 to 30 | How often the picture on the glass actually changes. Most wakes only CHECK (~7s); a draw is ~35s | ✅ |
 | `refresh_hour` | int | 0 to 23 | Local hour for the scheduled draw. The first check at or after it, never an exact alarm | ✅ |
@@ -229,7 +233,7 @@ Environment variables set the defaults for a fresh install. The full list, gener
 | 🔄 | **Landscape by orientation, not by dimensions** | Immich reports the stored EXIF width and height. Orientation values 5 to 8 transpose the image, so a photo stored 4032x3024 with `orientation: 6` renders portrait. On the library this was built against, `width > height` alone was wrong for 86% of photos |
 | 📷 | **Taken by a camera** | `exifInfo.make` is set by every phone and camera and by nothing else. It keeps screenshots, memes and downloads off the wall without guessing at filenames |
 | 🖼️ | **Portraits cropped, not skipped** | The panel is landscape. A portrait is cropped to 800x480 with the window placed on the faces Immich detected, so a close-up keeps its chin and a full-body shot keeps its body. Turn **Portraits** on to skip them instead |
-| 🌾 | **Calm enough to dither** | Mean absolute Laplacian over the cropped frame. Grass and foliage score high and turn into speckle under any algorithm; a subject against a plain wall scores low and survives. The renderer scores twenty candidates and shows the calmest |
+| 🌾 | **Calm enough to dither** | Mean absolute Laplacian over the cropped frame. Grass and foliage score high and turn into speckle under any algorithm; a subject against a plain wall scores low and survives. The renderer scores twenty candidates and shows a random one under the cap, or the calmest when none is |
 
 Sources you can choose from Home Assistant:
 
@@ -269,12 +273,12 @@ InkFrame-Immich/
 │   └── dependabot.yml
 ├── brand/                      # 🎨 icon and logo, drawn by tools/gen_brand.py
 ├── docs/                       # 📚 guides, deep-dives, runbooks (index: docs/README.md)
-│   └── assets/                 # 🖼️ diagrams, screenshots, demo image, brand tile, social preview
+│   └── assets/                 # 🖼️ diagrams, screenshots, demo image, social preview
 ├── tools/
 │   ├── gen_docs.py             # 🤖 regenerates the inventory tables
 │   ├── gen_diagram.py          #    draws the docs/assets diagrams
 │   ├── gen_brand.py            #    regenerates brand/, the demo and the social preview
-│   ├── brand_kit.py            #    the icon tile and the social preview layout
+│   ├── brand_kit.py            #    the social preview layout
 │   └── screenshots/            # 📸 make screenshots: stand-in Immich, real renderer, real Home Assistant
 ├── Makefile                    # 🔧 check, test, docs, diagram, brand, screenshots
 ├── llms.txt                    # 🤖 the project on one plain-text page

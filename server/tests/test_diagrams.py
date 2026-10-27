@@ -93,6 +93,32 @@ def test_the_svgs_carry_nothing_github_will_strip():
     assert not bad, "GitHub strips these without saying so:\n  " + "\n  ".join(bad)
 
 
+def test_no_text_runs_off_the_canvas():
+    """A label that leaves the viewBox is cut off on the page, and at README
+    width nobody notices until the sentence reads "score 20 candida". Widths
+    are estimated generously (a system font is never this wide per glyph on
+    average), so a pass here means the text fits with room to spare."""
+    module = _generator()
+    attrs = re.compile(r'<text x="([\d.-]+)" y="([\d.-]+)" font-family="([^"]+)" '
+                       r'font-size="([\d.]+)"[^>]*text-anchor="(\w+)"[^>]*>([^<]*)</text>')
+    bad, seen = [], 0
+    for name, fn in module.DIAGRAMS.items():
+        for scheme in module.SCHEMES:
+            svg = fn(scheme)
+            seen += svg.count("<text")
+            w, h = map(float, re.search(r'viewBox="0 0 ([\d.]+) ([\d.]+)"', svg).groups())
+            for x, y, font, size, anchor, body in attrs.findall(svg):
+                x, y, size = float(x), float(y), float(size)
+                chars = len(html.unescape(body))
+                width = chars * size * (0.62 if "monospace" in font else 0.56)
+                left = {"start": x, "middle": x - width / 2, "end": x - width}[anchor]
+                if left < 4 or left + width > w - 4 or y - size < 0 or y > h - 4:
+                    bad.append(f"{name}-{scheme}: {html.unescape(body)!r}")
+                seen -= 1
+    assert seen == 0, f"{seen} <text> elements were not measured; the pattern is stale"
+    assert not bad, "text leaves the canvas:\n  " + "\n  ".join(sorted(set(bad)))
+
+
 def test_mermaid_has_not_come_back_unguarded():
     """If Mermaid ever returns, the entity trap returns with it.
 

@@ -28,13 +28,13 @@ The renderer asks Immich for candidates from the chosen source, then applies thr
 
 1. **Orientation.** The photo must be landscape after EXIF orientation is applied, or, with portraits switched on, it is cropped around the faces Immich found.
 2. **Camera.** The EXIF `make` must be set, which keeps out screenshots, memes and downloads.
-3. **Texture.** The renderer downloads up to twenty candidates and scores each by the mean absolute Laplacian of the cropped greyscale frame. Busy texture such as foliage turns into speckle in one bit, so the calmest candidate wins.
+3. **Texture.** The renderer downloads up to twenty candidates and scores each by the mean absolute Laplacian of the cropped greyscale frame. Busy texture such as foliage turns into speckle in one bit, so the pick is a random candidate under the busyness cap, and the calmest only when every one is over it.
 
 The winner is cropped to 800x480, given a tone curve, smoothed where the texture is flat, sharpened at the edges and dithered with Floyd-Steinberg. [Rendering](rendering.md) has the order and the reasons.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/selection-pipeline-dark.svg">
-  <img src="assets/selection-pipeline-light.svg" width="100%" alt="A hundred random assets are filtered by orientation, then by whether a camera took them, then twenty are downloaded and scored and the calmest is rendered.">
+  <img src="assets/selection-pipeline-light.svg" width="100%" alt="Random assets come from Immich a hundred at a time, are filtered by orientation and then by whether a camera took them, then twenty are downloaded and scored for busyness, and a calm one is rendered.">
 </picture>
 
 ## What the renderer asks Immich

@@ -68,7 +68,7 @@ A person is offered only above a minimum number of landscape photographs (20 by 
 
 **On the panel** and **Up next** usually show the same photograph. They differ
 from the moment something renders a new one until the panel next wakes, which
-on a weekly cycle is days. That gap is the point: e-paper holds its last image
+on a multi-day cycle is days. That gap is the point: e-paper holds its last image
 with no power, so nothing about the wall tells you a newer photo is waiting.
 
 `On the panel` reads unknown until a display acknowledgement is recorded.
