@@ -6,6 +6,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-26
+
 ### Security
 - **The container cannot gain privileges.** `docker-compose.yml` now starts
   the renderer with `no-new-privileges`, as the volume-init one-shot already
@@ -169,7 +171,10 @@ All notable changes to this project are recorded here. The format follows
 - **Home Assistant integration** `inkframe`: Source (Random, Recent, People, Album, or a person), per-person Include switches, Album select, Recent window, Max busyness, Sleep interval, OTA window, render knobs, Photographs only, Next photo, Preview image, Photo, Busyness, On panel, Last panel fetch, diagnostics.
 - CI: renderer tests, generated-docs check, hassfest, HACS validation, ESPHome config validation.
 
-[Unreleased]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/CaputoDavide93/InkFrame-Immich/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CaputoDavide93/InkFrame-Immich/releases/tag/v0.1.0
